@@ -10,7 +10,7 @@ const pending = new Map();
 // used by the static GitHub Pages build). Detected once by probing the server.
 let backend = null;
 export function backendMode() {
-  backend ??= fetch('api/ai/status', { cache: 'no-store' })
+  backend ??= fetch('api/health', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => (d?.mode === 'server' ? 'server' : 'browser'))
     .catch(() => 'browser');

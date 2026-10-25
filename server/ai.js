@@ -9,7 +9,7 @@ import {
   receiptRequest, scheduleRequest, paystubRequest, mergeScheduleReads,
 } from '../public/js/ai-core.js';
 import { personMatches } from '../public/js/parse.js';
-import { DATA_DIR } from './db.js';
+import { DATA_DIR } from './store.js';
 
 export { AIError };
 
@@ -32,9 +32,8 @@ export function aiStatus() {
   return { enabled, provider: 'anthropic', model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL, mode: 'server' };
 }
 
-const blocksFrom = (files) => files.map(({ filePath, mimeType }) => fileBlock({
-  mimeType, base64: fs.readFileSync(filePath).toString('base64'), name: path.basename(filePath),
-}));
+// files: [{ buffer, mimeType, name }] loaded from the user's uploads.
+const blocksFrom = (files) => files.map(({ buffer, mimeType, name }) => fileBlock({ mimeType, base64: buffer.toString('base64'), name }));
 
 function run(request) {
   const status = aiStatus();
@@ -47,6 +46,7 @@ export const parseReceipt = ({ files, categories, today }) => run(receiptRequest
 // OCR text is handed to the vision models as a cross-check for small or tilted text.
 let ocrWorker = null;
 async function ocrText(files) {
+  if (process.env.OCR_HINT === 'off') return '';
   try {
     if (!ocrWorker) {
       const { createWorker } = await import('tesseract.js');
@@ -56,7 +56,7 @@ async function ocrText(files) {
     }
     const worker = await ocrWorker;
     let text = '';
-    for (const f of files.filter((x) => x.mimeType.startsWith('image/'))) text += (await worker.recognize(f.filePath)).data.text + '\n';
+    for (const f of files.filter((x) => x.mimeType.startsWith('image/'))) text += (await worker.recognize(f.buffer)).data.text + '\n';
     return text.trim();
   } catch (err) {
     console.warn('OCR hint skipped:', err.message);

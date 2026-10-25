@@ -1,0 +1,27 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Deploy: https://render.com/deploy?repo=https://github.com/iUtsa/MonthlyExpenses
+services:
+  - type: web
+    name: monthly-expenses
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm test
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL        # Neon connection string (postgresql://…?sslmode=require)
+        sync: false
+      - key: NVIDIA_API_KEY      # shared AI key, kept secret on the server
+        sync: false
+      - key: ADMIN_EMAIL         # this account gets unlimited AI reads
+        sync: false
+      - key: AI_DAILY_LIMIT
+        value: "25"
+      - key: USER_STORAGE_MB
+        value: "100"

@@ -348,8 +348,9 @@ export function differentialHours(shift, diff) {
   return (inside / 60) * (shiftHours(shift) / (minutes / 60));
 }
 
-// Earnings for each shift, with weekly (and optional daily) overtime allocated
-// in chronological order within each job's workweek.
+// Earnings for each shift. Overtime is manual: the hours you enter on a shift (`otHours`) are paid
+// at the job's overtime multiplier. Only if a job opts in (`autoOvertime`) are hours past its weekly
+// (or daily) threshold counted automatically — and a shift's own OT entry still wins.
 export function computeShifts(s, shifts = s.shifts) {
   const weekStartsOn = s.settings.weekStartsOn || 0;
   const sorted = [...shifts].sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
@@ -358,17 +359,21 @@ export function computeShifts(s, shifts = s.shifts) {
     const job = s.jobs.find((j) => j.id === shift.jobId);
     const rate = Number(shift.rate) || Number(job?.rate) || 0;
     const mult = Number(job?.otMultiplier) || 1.5;
-    const weeklyThr = job?.otWeeklyThreshold ?? 40;
-    const dailyThr = Number(job?.dailyOtThreshold) || 0;
     const hours = shiftHours(shift);
-    const dailyOt = dailyThr ? Math.max(0, hours - dailyThr) : 0;
-    const candidate = hours - dailyOt;
-    const key = `${shift.jobId}|${startOfWeek(shift.date, weekStartsOn)}`;
-    const before = weekly.get(key) || 0;
-    const weeklyOt = weeklyThr > 0 ? Math.max(0, Math.min(candidate, before + candidate - weeklyThr)) : 0;
-    weekly.set(key, before + candidate);
-    const regular = candidate - weeklyOt;
-    const overtime = dailyOt + weeklyOt;
+    let autoOt = 0;
+    if (job?.autoOvertime) {
+      const weeklyThr = Number(job.otWeeklyThreshold) || 0;
+      const dailyThr = Number(job.dailyOtThreshold) || 0;
+      const dailyOt = dailyThr ? Math.max(0, hours - dailyThr) : 0;
+      const candidate = hours - dailyOt;
+      const key = `${shift.jobId}|${startOfWeek(shift.date, weekStartsOn)}`;
+      const before = weekly.get(key) || 0;
+      weekly.set(key, before + candidate);
+      autoOt = dailyOt + (weeklyThr > 0 ? Math.max(0, Math.min(candidate, before + candidate - weeklyThr)) : 0);
+    }
+    const manual = shift.otHours !== undefined && shift.otHours !== null && shift.otHours !== '';
+    const overtime = Math.min(hours, manual ? Math.max(0, Number(shift.otHours) || 0) : autoOt);
+    const regular = hours - overtime;
     const diffs = (job?.differentials || []).map((d) => {
       const h = differentialHours(shift, d);
       return { name: d.name, hours: h, pay: h * (Number(d.amount) || 0) };
@@ -379,8 +384,7 @@ export function computeShifts(s, shifts = s.shifts) {
     const otPay = overtime * rate * mult;
     return {
       ...shift, job, rate, hours, regular, overtime, diffs, diffPay, tips, regularPay, otPay,
-      // Only FLSA weekly overtime counts toward the federal "no tax on overtime" deduction.
-      otPremium: weeklyThr === 40 ? weeklyOt * rate * (mult - 1) : 0,
+      otPremium: overtime * rate * (mult - 1), // used only by the optional tax calculator
       wages: regularPay + otPay + diffPay,
       gross: regularPay + otPay + diffPay + tips,
       week: startOfWeek(shift.date, weekStartsOn),
@@ -409,29 +413,29 @@ export function payPeriod(job, date) {
   return { start: addDays(end, -len + 1), end, payday: addDays(end, lag) };
 }
 
-// Withholding estimate for one paycheck: annualize the period, compute annual tax, divide back.
-// Withholding ignores the OBBBA deductions (they are claimed when filing), so the gap is a refund estimate.
+// Taxes on a paycheck are whatever you set on the job — never estimated automatically.
+export const TAX_MODES = [
+  { id: 'none', name: 'No tax taken out (0%)' },
+  { id: 'percent', name: 'My own percentages' },
+  { id: 'flat', name: 'Fixed amount per paycheck' },
+];
+export const TAX_LINES = [
+  { id: 'federal', name: 'Federal income tax' }, { id: 'state', name: 'State income tax' }, { id: 'local', name: 'Local tax' },
+  { id: 'socialSecurity', name: 'Social Security' }, { id: 'medicare', name: 'Medicare' }, { id: 'other', name: 'Other' },
+];
+
 export function paycheckTaxes(s, job, { wages, tips }) {
-  const periods = periodsPerYear(job?.payFrequency);
-  const preTaxPct = Number(job?.preTaxPercent ?? s.settings.tax.preTaxPercent) || 0;
   const gross = wages + tips;
-  const preTax = gross * preTaxPct;
-  const stub = s.settings.tax.useStubRates && s.settings.tax.stubRates;
-  if (stub) {
-    const taxes = {
-      federal: gross * stub.federal, state: gross * stub.state, local: gross * (stub.local || 0),
-      socialSecurity: gross * stub.socialSecurity, medicare: gross * stub.medicare,
-    };
-    const total = sum(Object.values(taxes));
-    return { ...taxes, preTax, gross, total, net: gross - preTax - total, source: 'pay stub' };
+  const preTax = gross * (Number(job?.preTaxPercent) || 0);
+  const tax = job?.tax || { mode: 'none' };
+  const taxes = Object.fromEntries(TAX_LINES.map((l) => [l.id, 0]));
+  if (tax.mode === 'percent') {
+    for (const l of TAX_LINES) taxes[l.id] = gross * (Number(tax.rates?.[l.id]) || 0);
+  } else if (tax.mode === 'flat' && gross > 0) {
+    taxes.other = Math.min(Math.max(0, gross - preTax), Number(tax.flat) || 0);
   }
-  const annual = annualTax({ wages: wages * periods, tips: tips * periods, preTax: preTax * periods, settingsTax: s.settings.tax, obbba: false });
-  const taxes = {
-    federal: annual.federal / periods, state: annual.state / periods, local: annual.local / periods,
-    socialSecurity: annual.socialSecurity / periods, medicare: annual.medicare / periods,
-  };
   const total = sum(Object.values(taxes));
-  return { ...taxes, preTax, gross, total, net: gross - preTax - total, source: 'estimate' };
+  return { ...taxes, preTax, gross, total, net: gross - preTax - total, source: tax.mode };
 }
 
 // Group computed shifts into paychecks. Salaried jobs produce paychecks without shifts.

@@ -5,7 +5,7 @@ import {
 } from '../util.js';
 import {
   computeShifts, earningsForMonth, paychecks, yearTaxProjection, annualTax, shiftHours,
-  PAY_FREQUENCIES, FILING_STATUSES, TAX_TABLES,
+  PAY_FREQUENCIES, FILING_STATUSES, TAX_TABLES, TAX_MODES, TAX_LINES,
 } from '../calc.js';
 import { parseScheduleRows, parseScheduleText, parseICS, personMatches } from '../parse.js';
 import { barChart, seriesColor } from '../charts.js';
@@ -19,7 +19,7 @@ let busy = '';
 
 const TABS = [
   ['overview', 'Earnings overview'], ['shifts', 'Schedule & shifts'], ['jobs', 'Jobs & pay rates'],
-  ['stubs', 'Pay stubs'], ['tax', 'Tax estimator'],
+  ['stubs', 'Pay stubs'], ['tax', 'Tax calculator'],
 ];
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -72,7 +72,7 @@ function overview(el, ctx) {
       </div>
     </div>
     <div class="card flush" style="margin-top:16px">
-      <div class="card-head"><div><h2>Paychecks</h2><p>This month's and the next 45 days. Estimates use your tax settings${state.settings.tax.useStubRates ? ' (rates from your latest pay stub)' : ''}.</p></div></div>
+      <div class="card-head"><div><h2>Paychecks</h2><p>This month's and the next 45 days. Taxes follow what you set on each job (✎ in Jobs & pay rates).</p></div></div>
       ${paycheckTable([...new Map([...e.paychecks, ...upcoming].map((p) => [`${p.job.id}|${p.payday}`, p])).values()].sort((a, b) => a.payday.localeCompare(b.payday)), recorded)}
     </div>`;
 
@@ -137,7 +137,7 @@ function paycheckTable(list, recorded) {
       <td class="small muted">${fmtDate(p.start)} – ${fmtDate(p.end)}</td>
       <td class="num">${p.salary ? '—' : num(p.hours, 1)}</td>
       <td class="num">${money(p.gross)}</td>
-      <td class="num neg">−${money(p.total + p.preTax)}</td>
+      <td class="num ${p.total + p.preTax ? 'neg' : 'muted'}">${p.total + p.preTax ? `−${money(p.total + p.preTax)}` : 'none'}</td>
       <td class="num pos"><strong>${money(p.net)}</strong></td>
       <td class="actions"><button class="btn small" data-breakdown="${key}">Breakdown</button>
         ${recorded.get(key)?.estimated ? `<button class="btn small" data-record="${key}" title="Added automatically on payday — confirm the real amount">Estimated · confirm</button>` : recorded.has(key) ? '<span class="badge good">✓ Received</span>' : p.payday <= today() ? `<button class="btn small" data-record="${key}">Record</button>` : '<span class="small muted">upcoming</span>'}</td>
@@ -160,15 +160,11 @@ function paycheckModal(p) {
         ${lines.map(([k, v]) => `<span>${k}</span><span>${money(v)}</span>`).join('')}
         <span class="total">Gross pay</span><span class="total">${money(p.gross)}</span>
         ${p.preTax ? `<span>Pre-tax deductions (401k, health…)</span><span class="neg">−${money(p.preTax)}</span>` : ''}
-        <span>Federal income tax withholding</span><span class="neg">−${money(p.federal)}</span>
-        <span>Social Security (6.2%)</span><span class="neg">−${money(p.socialSecurity)}</span>
-        <span>Medicare (1.45%)</span><span class="neg">−${money(p.medicare)}</span>
-        <span>State income tax</span><span class="neg">−${money(p.state)}</span>
-        ${p.local ? `<span>Local tax</span><span class="neg">−${money(p.local)}</span>` : ''}
+        ${TAX_LINES.filter((l) => p[l.id]).map((l) => `<span>${l.name}</span><span class="neg">−${money(p[l.id])}</span>`).join('') || '<span>Taxes</span><span>none</span>'}
         <span class="total">Take-home</span><span class="total pos">${money(p.net)}</span>
       </div>
       ${p.shifts.length ? `<h3 style="margin-top:16px">Shifts</h3><table class="table-compact" style="margin-top:6px"><tbody>${p.shifts.map((s) => `<tr><td>${fmtDate(s.date, { weekday: 'short', month: 'short', day: 'numeric' })}</td><td>${s.start}–${s.end}</td><td class="num">${num(s.hours, 2)} h${s.overtime ? ` <span class="badge warn">${num(s.overtime, 2)} OT</span>` : ''}</td><td class="num">${money(s.gross)}</td></tr>`).join('')}</tbody></table>` : ''}
-      <p class="small muted" style="margin-top:12px">Withholding is estimated by annualizing this paycheck (${p.source}). Your real stub may differ by W-4 settings and benefits.</p>`,
+      <p class="small muted" style="margin-top:12px">Taxes: ${esc(TAX_MODES.find((m) => m.id === p.source)?.name || 'none')} — change it on the job. Overtime is only what you entered on each shift.</p>`,
   });
 }
 
@@ -210,7 +206,7 @@ function shiftsTab(el, ctx) {
       ${calendar(month, computed)}
     </div>
     <div class="card flush" style="margin-top:16px">
-      <div class="card-head"><div><h2>Shifts by workweek</h2><p>Overtime is applied after ${state.jobs[0]?.otWeeklyThreshold ?? 40} hours per workweek per job.</p></div></div>
+      <div class="card-head"><div><h2>Shifts by workweek</h2><p>Overtime is what you enter on each shift (✎) — nothing is added automatically.</p></div></div>
       ${computed.length ? `<div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Time</th><th>Job / role</th><th class="num">Hours</th><th class="num">OT</th><th class="num">Tips</th><th class="num">Gross</th><th></th></tr></thead>
         <tbody>${[...weeks.entries()].map(([w, list]) => `
@@ -324,6 +320,7 @@ async function readSchedule(files, ctx) {
     toast(err.message, 'bad');
   } finally {
     busy = '';
+    ctx.refreshAi?.();
     ctx.refresh();
   }
 }
@@ -381,13 +378,14 @@ function renderPending(box, ctx) {
         ${dates.length ? `<div><div class="small muted" style="margin-bottom:4px">Your week${dates.length > 7 ? 's' : ''} at a glance — compare with the picture</div><div class="cal">${DAY_NAMES.slice(state.settings.weekStartsOn || 0).concat(DAY_NAMES.slice(0, state.settings.weekStartsOn || 0)).map((n) => `<div class="cal-head">${n}</div>`).join('')}
           ${dates.map((d) => { const mine = rows.filter((r) => r.date === d && r.include); const { from, to } = scheduleRange(); const outside = d < from || d > to; return `<div class="cal-day ${outside ? 'out' : ''}" style="min-height:58px"><div class="cal-num">${fmtDate(d)}</div>${mine.length ? mine.map((r) => `<span class="cal-chip ${pending.readers > 1 && r.votes < 2 ? 'bill' : 'pay'}">${r.start}–${r.end}</span>`).join('') : `<span class="small muted">${outside ? '' : 'off'}</span>`}</div>`; }).join('')}</div></div>` : ''}
         <div class="table-wrap"><table class="table-compact">
-          <thead><tr><th></th><th>Date</th><th>Start</th><th>End</th><th>Break</th><th>Printed as</th><th class="num">Hours</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Date</th><th>Start</th><th>End</th><th>Break</th><th>OT h</th><th>Printed as</th><th class="num">Hours</th><th></th></tr></thead>
           <tbody>${rows.map((r, i) => `<tr>
             <td><input type="checkbox" data-p="${i}" data-field="include" ${r.include ? 'checked' : ''} aria-label="Include"></td>
             <td><input type="date" class="cell" data-p="${i}" data-field="date" value="${esc(r.date)}"></td>
             <td><input type="time" class="cell" data-p="${i}" data-field="start" value="${esc(r.start)}"></td>
             <td><input type="time" class="cell" data-p="${i}" data-field="end" value="${esc(r.end)}"></td>
             <td><input type="number" class="cell num" data-p="${i}" data-field="break_minutes" value="${r.break_minutes || 0}" style="width:64px"></td>
+            <td><input type="number" step="0.25" min="0" class="cell num" data-p="${i}" data-field="otHours" value="${r.otHours || ''}" placeholder="0" style="width:58px" title="Overtime hours on this shift"></td>
             <td class="small muted">${esc(r.time_text || '')}</td>
             <td class="num">${num(shiftHours({ start: r.start, end: r.end, breakMin: r.break_minutes }), 2)}</td>
             <td>${r.suspect ? '<span class="badge bad" title="Only one reading put a shift here, and the same hours appear on the next/previous day — usually a misread column. Tick it if it is real.">misread?</span>' : pending.readers > 1 ? (r.votes >= 2 ? `<span class="badge good" title="${r.votes} of ${pending.readers} readings found this shift">✓ ${r.votes}/${pending.readers}</span>` : '<span class="badge warn" title="Only one reading found this shift — compare with the picture">check</span>') : ''}</td>
@@ -423,7 +421,7 @@ function renderPending(box, ctx) {
     const add = rows.filter((r) => r.include && r.date && r.start && r.end && !dupes.has(`${pending.jobId}|${r.date}|${r.start}`));
     update('shifts', () => keep.concat(add.map((r) => ({
       id: uid('shift'), jobId: pending.jobId, date: r.date, start: r.start, end: r.end, breakMin: r.break_minutes || 0,
-      tips: 0, role: r.role || '', notes: '', source: 'upload',
+      tips: 0, role: r.role || '', notes: '', source: 'upload', ...(r.otHours ? { otHours: r.otHours } : {}),
     }))));
     toast(`Saved ${add.length} shifts${replace ? ` (replaced ${removed.size})` : ''} — paychecks and your budget are updated`);
     pending = null;
@@ -442,13 +440,15 @@ async function shiftForm(shift, ctx) {
       <label class="field">End<input type="time" name="end" value="${s.end}" required></label>
       <label class="field">Unpaid break (min)<input type="number" name="breakMin" value="${s.breakMin || 0}" min="0"></label>
       <label class="field">Tips<input type="number" step="0.01" name="tips" value="${s.tips || 0}" min="0"></label>
+      <label class="field">Overtime hours<input type="number" step="0.25" name="otHours" value="${s.otHours ?? ''}" min="0" placeholder="0"></label>
       <label class="field">Rate override ($/hr)<input type="number" step="0.01" name="rate" value="${s.rate || ''}" placeholder="Job default"></label>
       <label class="field">Role<input name="role" value="${esc(s.role || '')}"></label>
       <label class="field span-2">Notes<input name="notes" value="${esc(s.notes || '')}"></label>
     </div>
     ${shift ? '' : '<label class="check" style="margin-top:12px"><input type="checkbox" name="repeat"> Repeat weekly for <input type="number" name="weeks" value="4" min="1" max="52" style="width:60px"> weeks</label>'}`,
     onSubmit(form, v) {
-      const base = { jobId: v.jobId, start: v.start, end: v.end, breakMin: v.breakMin, tips: v.tips, rate: v.rate || 0, role: v.role, notes: v.notes };
+      const otRaw = form.otHours.value;
+      const base = { jobId: v.jobId, start: v.start, end: v.end, breakMin: v.breakMin, tips: v.tips, rate: v.rate || 0, role: v.role, notes: v.notes, otHours: otRaw === '' ? undefined : Number(otRaw) };
       update('shifts', (l) => {
         if (shift) Object.assign(l.find((x) => x.id === shift.id), base, { date: v.date });
         else {
@@ -462,6 +462,16 @@ async function shiftForm(shift, ctx) {
 }
 
 /* ====================== Jobs ====================== */
+function taxSummary(j) {
+  const t = j.tax || { mode: 'none' };
+  if (t.mode === 'flat') return `${money(t.flat)} per paycheck`;
+  if (t.mode === 'percent') {
+    const total = sum(TAX_LINES, (l) => t.rates?.[l.id] || 0);
+    return `${pct(total, 1)} of gross (your percentages)`;
+  }
+  return 'None (0%)';
+}
+
 function jobsTab(el, ctx) {
   el.innerHTML = `
     <div class="row between" style="margin-bottom:12px"><p class="text-2" style="margin:0">Pay rules used to turn shifts into paychecks.</p><button class="btn primary" data-action="new-job">+ Add job</button></div>
@@ -471,7 +481,8 @@ function jobsTab(el, ctx) {
       <div class="kv">
         <span>Pay</span><span>${j.payType === 'salary' ? `${money(j.salaryAnnual, { cents: false })}/yr` : `${money(j.rate)}/hr`}</span>
         <span>Pay schedule</span><span>${esc(PAY_FREQUENCIES.find((f) => f.id === j.payFrequency)?.name || '')}</span>
-        ${j.payType === 'salary' ? '' : `<span>Overtime</span><span>${j.otMultiplier}× after ${j.otWeeklyThreshold || '—'} h/week${j.dailyOtThreshold ? ` or ${j.dailyOtThreshold} h/day` : ''}</span>`}
+        ${j.payType === 'salary' ? '' : `<span>Overtime</span><span>${j.autoOvertime ? `${j.otMultiplier}× after ${j.otWeeklyThreshold || '—'} h/week${j.dailyOtThreshold ? ` or ${j.dailyOtThreshold} h/day` : ''}` : `manual, paid ${j.otMultiplier}×`}</span>`}
+        <span>Taxes</span><span>${esc(taxSummary(j))}</span>
         <span>Pre-tax deductions</span><span>${pct(j.preTaxPercent || 0, 1)}</span>
         ${(j.differentials || []).map((d) => `<span>${esc(d.name)}</span><span>+${money(d.amount)}/hr · ${d.days?.length && d.days.length < 7 ? d.days.map((x) => DAY_NAMES[x]).join(' ') : 'every day'} ${d.start === d.end ? '' : `${d.start}–${d.end}`}</span>`).join('')}
       </div></div>`).join('')}</div>`;
@@ -490,7 +501,8 @@ function jobsTab(el, ctx) {
 const lastSaturday = () => addDays(today(), -((new Date().getDay() + 1) % 7));
 
 async function jobForm(job) {
-  const j = job || { name: '', sourceId: state.jobs.length ? 'side' : 'salary', payType: 'hourly', rate: 15, salaryAnnual: 0, payFrequency: 'biweekly', periodEndAnchor: lastSaturday(), payLagDays: 6, otMultiplier: 1.5, otWeeklyThreshold: 40, dailyOtThreshold: 0, preTaxPercent: 0, differentials: [] };
+  const j = job || { name: '', sourceId: state.jobs.length ? 'side' : 'salary', payType: 'hourly', rate: 15, salaryAnnual: 0, payFrequency: 'biweekly', periodEndAnchor: lastSaturday(), payLagDays: 6, otMultiplier: 1.5, autoOvertime: false, otWeeklyThreshold: 40, dailyOtThreshold: 0, preTaxPercent: 0, tax: { mode: 'none', rates: {}, flat: 0 }, differentials: [] };
+  const tax = j.tax || { mode: 'none', rates: {}, flat: 0 };
   let diffs = structuredClone(j.differentials || []);
   const diffRows = () => diffs.map((d, i) => `<div class="row" style="margin-bottom:6px" data-diff="${i}">
     <input data-df="name" value="${esc(d.name)}" placeholder="Night / Weekend" style="width:120px">
@@ -510,10 +522,24 @@ async function jobForm(job) {
       <label class="field">Pay frequency<select name="payFrequency">${options(PAY_FREQUENCIES, j.payFrequency)}</select></label>
       <label class="field">A pay-period end date<input type="date" name="periodEndAnchor" value="${j.periodEndAnchor || lastSaturday()}" title="Weekly/biweekly: the last day of any pay period"></label>
       <label class="field">Payday = period end + days<input type="number" name="payLagDays" value="${j.payLagDays ?? 6}" min="0" max="31"></label>
-      <label class="field">Overtime multiplier<input type="number" step="0.1" name="otMultiplier" value="${j.otMultiplier}"></label>
-      <label class="field">Weekly OT after (hours, 0 = none)<input type="number" name="otWeeklyThreshold" value="${j.otWeeklyThreshold}"></label>
-      <label class="field">Daily OT after (hours, 0 = off; CA = 8)<input type="number" name="dailyOtThreshold" value="${j.dailyOtThreshold || 0}"></label>
+      <label class="field">Overtime pay multiplier<input type="number" step="0.1" name="otMultiplier" value="${j.otMultiplier}"></label>
       <label class="field">Pre-tax deductions (% of gross)<input type="number" step="0.1" name="preTaxPct" value="${round2((j.preTaxPercent || 0) * 100)}"></label>
+    </div>
+
+    <h3 style="margin:16px 0 6px">Taxes on each paycheck</h3>
+    <div class="form-grid">
+      <label class="field span-2">How much tax comes out<select name="taxMode" id="taxMode">${options(TAX_MODES, tax.mode)}</select></label>
+      <label class="field taxflat">Amount per paycheck<input type="number" step="0.01" name="taxFlat" value="${tax.flat || 0}"></label>
+      ${TAX_LINES.map((l) => `<label class="field taxpct">${l.name} %<input type="number" step="0.01" name="rate_${l.id}" value="${round2((tax.rates?.[l.id] || 0) * 100)}"></label>`).join('')}
+    </div>
+    ${state.paystubs.length ? '<button type="button" class="btn small taxpct" data-stub-rates style="margin-top:8px">Copy percentages from my latest pay stub</button>' : ''}
+
+    <h3 style="margin:16px 0 6px">Overtime</h3>
+    <p class="small muted">By default overtime is manual: enter overtime hours on a shift and they're paid at the multiplier above.</p>
+    <label class="check"><input type="checkbox" name="autoOvertime" id="autoOt" ${j.autoOvertime ? 'checked' : ''}> Also count overtime automatically</label>
+    <div class="form-grid autoot" style="margin-top:8px">
+      <label class="field">…after this many hours per week<input type="number" name="otWeeklyThreshold" value="${j.otWeeklyThreshold ?? 40}"></label>
+      <label class="field">…or per day (0 = off)<input type="number" name="dailyOtThreshold" value="${j.dailyOtThreshold || 0}"></label>
     </div>
     <label class="check" style="margin-top:12px"><input type="checkbox" name="autoRecord" ${j.autoRecord === false ? '' : 'checked'}> Add each paycheck to income automatically on payday (estimated until you confirm it or upload the pay stub)</label>
     <h3 style="margin:16px 0 8px">Shift differentials</h3>
@@ -521,6 +547,21 @@ async function jobForm(job) {
     <div id="diffs">${diffRows()}</div>
     <button type="button" class="btn small" data-add-diff>+ Differential</button>`,
     onOpen(form) {
+      const syncTax = () => {
+        $$('.taxpct', form).forEach((x) => x.classList.toggle('hidden', form.taxMode.value !== 'percent'));
+        $$('.taxflat', form).forEach((x) => x.classList.toggle('hidden', form.taxMode.value !== 'flat'));
+        $$('.autoot', form).forEach((x) => x.classList.toggle('hidden', !form.autoOvertime.checked));
+      };
+      form.taxMode.addEventListener('change', syncTax);
+      form.autoOvertime.addEventListener('change', syncTax);
+      syncTax();
+      on(form, 'click', '[data-stub-rates]', () => {
+        const latest = [...state.paystubs].sort((a, b) => b.pay_date.localeCompare(a.pay_date))[0];
+        const g = latest.gross_pay || 1;
+        const r = { federal: latest.federal_income_tax / g, state: latest.state_income_tax / g, local: latest.local_tax / g, socialSecurity: latest.social_security / g, medicare: latest.medicare / g, other: 0 };
+        for (const l of TAX_LINES) form[`rate_${l.id}`].value = round2(r[l.id] * 100);
+        toast('Percentages copied from your pay stub — review, then save');
+      });
       const refresh = () => { $('#diffs', form).innerHTML = diffRows(); };
       const read = () => {
         diffs = $$('[data-diff]', form).map((row) => ({
@@ -539,7 +580,8 @@ async function jobForm(job) {
         ...(job || { id: uid('job') }),
         name: v.name.trim(), sourceId: v.sourceId, payType: v.payType, rate: v.rate, salaryAnnual: v.salaryAnnual,
         payFrequency: v.payFrequency, periodEndAnchor: v.periodEndAnchor, payLagDays: v.payLagDays, otMultiplier: v.otMultiplier || 1.5,
-        otWeeklyThreshold: v.otWeeklyThreshold, dailyOtThreshold: v.dailyOtThreshold, preTaxPercent: (v.preTaxPct || 0) / 100,
+        autoOvertime: v.autoOvertime, otWeeklyThreshold: v.otWeeklyThreshold, dailyOtThreshold: v.dailyOtThreshold, preTaxPercent: (v.preTaxPct || 0) / 100,
+        tax: { mode: v.taxMode, flat: v.taxFlat || 0, rates: Object.fromEntries(TAX_LINES.map((l) => [l.id, (v[`rate_${l.id}`] || 0) / 100])) },
         differentials: diffs.map((d) => ({ ...d, days: d.days.length === 7 ? [] : d.days })),
         autoRecord: v.autoRecord,
       };
@@ -565,14 +607,14 @@ function stubsTab(el, ctx) {
         </div>`}
       </div>
       <div class="card">
-        <h2>Withholding calibration</h2>
+        <h2>Rates on your latest stub</h2>
         ${latest ? `<div class="kv small" style="margin-top:10px">
           <span>Federal</span><span>${pct(latest.federal_income_tax / latest.gross_pay, 1)}</span>
           <span>State</span><span>${pct(latest.state_income_tax / latest.gross_pay, 1)}</span>
           <span>Social Security + Medicare</span><span>${pct((latest.social_security + latest.medicare) / latest.gross_pay, 2)}</span>
           <span class="total">Take-home share</span><span class="total">${pct(latest.net_pay / latest.gross_pay, 1)}</span></div>
-          <label class="check" style="margin-top:12px"><input type="checkbox" id="useStub" ${state.settings.tax.useStubRates ? 'checked' : ''}> Use these rates for paycheck estimates</label>`
-    : '<p class="muted small" style="margin-top:8px">Add a stub to compare your real withholding with the estimate.</p>'}
+          ${state.jobs.length ? `<div class="row" style="margin-top:12px">${state.jobs.map((j) => `<button class="btn small" data-use-stub="${j.id}">Use for ${esc(j.name)}</button>`).join('')}</div><p class="small muted" style="margin-top:6px">Only applied when you click — sets that job's taxes to these percentages.</p>` : ''}`
+    : '<p class="muted small" style="margin-top:8px">Add a stub to see what percentages your employer takes out.</p>'}
       </div>
     </div>
     <div id="stubDraft"></div>
@@ -602,13 +644,14 @@ function stubsTab(el, ctx) {
       stubDraft = { ...(await api('/api/ai/paystub', { method: 'POST', body: { files: uploaded } })), files: uploaded };
     } catch (err) { toast(err.message, 'bad'); } finally { busy = ''; ctx.refresh(); }
   });
-  $('#useStub', el)?.addEventListener('change', (e) => {
-    update('settings', (s) => {
-      s.tax.useStubRates = e.target.checked;
-      const g = latest.gross_pay || 1;
-      s.tax.stubRates = { federal: latest.federal_income_tax / g, state: latest.state_income_tax / g, local: latest.local_tax / g, socialSecurity: latest.social_security / g, medicare: latest.medicare / g };
+  on(el, 'click', '[data-use-stub]', (e, b) => {
+    const job = state.jobs.find((j) => j.id === b.dataset.useStub);
+    const g = latest.gross_pay || 1;
+    update('jobs', () => {
+      job.tax = { mode: 'percent', flat: 0, rates: { federal: latest.federal_income_tax / g, state: latest.state_income_tax / g, local: latest.local_tax / g, socialSecurity: latest.social_security / g, medicare: latest.medicare / g, other: 0 } };
     });
-    toast(e.target.checked ? 'Paycheck estimates now use your stub’s rates' : 'Back to bracket-based estimates');
+    toast(`${job.name} now uses your stub's tax percentages`);
+    ctx.refresh();
   });
   on(el, 'click', '[data-action=manual-stub]', () => {
     stubDraft = { employer: state.jobs[0]?.name || '', pay_date: today(), period_start: '', period_end: '', hours_regular: 0, hours_overtime: 0, hourly_rate: 0, gross_pay: 0, tips: 0, federal_income_tax: 0, state_income_tax: 0, local_tax: 0, social_security: 0, medicare: 0, pre_tax_deductions: [], post_tax_deductions: [], net_pay: 0, ytd_gross: 0, notes: '' };
@@ -683,7 +726,8 @@ function taxTab(el, ctx) {
 
   el.innerHTML = `
     <div class="card">
-      <div class="card-head"><div><h2>Tax settings (${tx.year} federal figures)</h2><p>Standard deduction ${money(table.standard[tx.filingStatus], { cents: false })} · Social Security wage base ${money(table.ssWageBase, { cents: false })}</p></div></div>
+      <div class="alert info" style="margin-bottom:12px"><span class="alert-icon">i</span><div class="small">This is an optional calculator for planning your tax year. It never changes your paychecks — those use the taxes you set on each job.</div></div>
+      <div class="card-head"><div><h2>Calculator settings (${tx.year} federal figures)</h2><p>Standard deduction ${money(table.standard[tx.filingStatus], { cents: false })} · Social Security wage base ${money(table.ssWageBase, { cents: false })}</p></div></div>
       <div class="form-grid">
         <label class="field">Filing status<select data-tax="filingStatus">${options(FILING_STATUSES, tx.filingStatus)}</select></label>
         <label class="field">State income tax (flat %)<input type="number" step="0.1" data-tax="stateRate" value="${round2(tx.stateRate * 100)}"></label>

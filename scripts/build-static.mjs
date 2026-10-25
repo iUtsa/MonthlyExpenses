@@ -24,7 +24,7 @@ await build({
 
 fs.writeFileSync(path.join(OUT, '.nojekyll'), '');
 // Answers the app's server probe so it switches to browser storage without a 404 in the console.
-fs.mkdirSync(path.join(OUT, 'api', 'ai'), { recursive: true });
-fs.writeFileSync(path.join(OUT, 'api', 'ai', 'status'), JSON.stringify({ mode: 'browser' }));
+fs.mkdirSync(path.join(OUT, 'api'), { recursive: true });
+fs.writeFileSync(path.join(OUT, 'api', 'health'), JSON.stringify({ mode: 'browser' }));
 const size = (dir) => fs.readdirSync(dir, { withFileTypes: true }).reduce((a, e) => a + (e.isDirectory() ? size(path.join(dir, e.name)) : fs.statSync(path.join(dir, e.name)).size), 0);
 console.log(`Static site built in ${OUT}/ (${(size(OUT) / 1e6).toFixed(1)} MB)`);

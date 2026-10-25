@@ -1,4 +1,4 @@
-import { state, loadState, api } from './store.js';
+import { state, loadState, api, backendMode } from './store.js';
 import { $, esc, thisMonth, shiftMonth, toast, on } from './util.js';
 import { destroyCharts } from './charts.js';
 import { runAutomations } from './automation.js';
@@ -50,10 +50,20 @@ function setMonth(month) {
 
 function renderAiBadge() {
   const provider = ctx.ai.provider === 'nvidia' ? 'NVIDIA' : 'Claude';
-  $('#aiBadge').innerHTML = ctx.ai.enabled
-    ? `<span class="badge good">✓ AI reading on</span><div class="small muted" style="margin-top:4px">${provider} · ${esc(ctx.ai.model)}</div>`
-    : `<span class="badge">On-device OCR</span><div class="small muted" style="margin-top:4px">${ctx.ai.mode === 'browser' ? 'Add an Anthropic key in <a href="#/settings">Settings</a>' : 'Add an NVIDIA or Anthropic key to .env'} for more accurate receipt & schedule reading.</div>`;
+  const quota = ctx.ai.limit ? ` · ${Math.max(0, ctx.ai.limit - (ctx.ai.used || 0))} of ${ctx.ai.limit} reads left today` : '';
+  const account = ctx.user ? `<div class="small" style="margin-bottom:10px"><div class="title" style="font-weight:600">${esc(ctx.user.name || ctx.user.email)}</div><div class="muted">${esc(ctx.user.email)}</div><a href="#" data-signout>Sign out</a></div>` : '';
+  $('#aiBadge').innerHTML = account + (ctx.ai.enabled
+    ? `<span class="badge good">✓ AI reading on</span><div class="small muted" style="margin-top:4px">${provider}${quota}</div>`
+    : `<span class="badge">On-device OCR</span><div class="small muted" style="margin-top:4px">${ctx.ai.mode === 'browser' ? 'Add an Anthropic key in <a href="#/settings">Settings</a>' : 'Add an NVIDIA or Anthropic key to .env'} for more accurate receipt & schedule reading.</div>`);
 }
+
+// Refresh the AI read counter after each upload (cheap; only in account mode).
+export async function refreshAi() {
+  if (!ctx.user) return;
+  ctx.ai = await api('/api/ai/status').catch(() => ctx.ai);
+  renderAiBadge();
+}
+ctx.refreshAi = refreshAi;
 
 let renderToken = 0;
 async function render() {
@@ -155,9 +165,33 @@ function initChrome() {
   $('#menuBtn').addEventListener('click', () => { $('#sidebar').classList.add('open'); $('#scrim').classList.add('open'); });
   $('#scrim').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#scrim').classList.remove('open'); });
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());
+  on(document.body, 'click', '[data-signout]', async (e) => {
+    e.preventDefault();
+    const { flushAll } = await import('./store.js');
+    await flushAll().catch(() => {});
+    await api('/api/auth/logout', { method: 'POST' });
+    location.hash = '';
+    location.reload();
+  });
 }
 
 async function boot() {
+  // Server with accounts: sign in first.
+  if ((await backendMode()) === 'server') {
+    let me;
+    try {
+      me = await api('/api/auth/me');
+    } catch (err) {
+      if (err.status === 401) {
+        document.querySelector('.layout').classList.add('hidden');
+        const health = await api('/api/health').catch(() => ({}));
+        (await import('./auth-screen.js')).showAuthScreen({ signup: health.signup !== false });
+        return;
+      }
+    }
+    ctx.user = me?.user || null;
+    ctx.ai = me?.ai || { enabled: false };
+  }
   initChrome();
   try {
     await loadState();
@@ -165,7 +199,7 @@ async function boot() {
     $('#view').innerHTML = `<div class="alert bad"><span class="alert-icon">!</span><div><strong>Cannot reach the server.</strong><br>Start it with <code>npm start</code> and reload. (${esc(err.message)})</div></div>`;
     return;
   }
-  ctx.ai = await api('/api/ai/status').catch(() => ({ enabled: false }));
+  if (!ctx.user) ctx.ai = await api('/api/ai/status').catch(() => ({ enabled: false }));
   window.addEventListener('hashchange', onRoute);
   onRoute();
   if (!state.settings) toast('Database is empty', 'bad');

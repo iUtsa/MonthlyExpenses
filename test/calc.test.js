@@ -103,9 +103,9 @@ test('annual tax with FICA, state, and OBBBA overtime/tips deductions', () => {
   close(annualTax({ wages: 300000, settingsTax }).socialSecurity, 184500 * 0.062);
 });
 
-test('shifts: weekly overtime after 40h, overnight shifts, breaks, differentials', () => {
+test('opt-in automatic overtime: after 40h, overnight shifts, breaks, differentials', () => {
   const s = createSeed();
-  s.jobs = [{ id: 'j', name: 'Job', rate: 20, otMultiplier: 1.5, otWeeklyThreshold: 40, payFrequency: 'weekly', periodEndAnchor: '2026-10-24', payLagDays: 6,
+  s.jobs = [{ id: 'j', name: 'Job', rate: 20, otMultiplier: 1.5, autoOvertime: true, otWeeklyThreshold: 40, payFrequency: 'weekly', periodEndAnchor: '2026-10-24', payLagDays: 6,
     differentials: [{ name: 'Night', amount: 2, start: '22:00', end: '06:00', days: [] }] }];
   // Sun 10/18 .. Sat 10/24, five 9h shifts (8.5 paid after 30m break) = 42.5h
   s.shifts = ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'].map((date, i) => ({ id: `s${i}`, jobId: 'j', date, start: '09:00', end: '18:00', breakMin: 30, tips: 0 }));
@@ -126,10 +126,10 @@ test('shifts: weekly overtime after 40h, overnight shifts, breaks, differentials
 
 test('daily overtime (California style) is not double counted', () => {
   const s = createSeed();
-  s.jobs = [{ id: 'j', name: 'Job', rate: 10, otMultiplier: 1.5, otWeeklyThreshold: 40, dailyOtThreshold: 8, payFrequency: 'weekly' }];
+  s.jobs = [{ id: 'j', name: 'Job', rate: 10, otMultiplier: 1.5, autoOvertime: true, otWeeklyThreshold: 40, dailyOtThreshold: 8, payFrequency: 'weekly' }];
   s.shifts = [{ id: 'a', jobId: 'j', date: '2026-10-19', start: '08:00', end: '20:00', breakMin: 0 }];
   const [x] = computeShifts(s);
-  close(x.hours, 12); close(x.overtime, 4); close(x.regular, 8); close(x.otPremium, 0);
+  close(x.hours, 12); close(x.overtime, 4); close(x.regular, 8);
 });
 
 test('differential windows respect weekdays', () => {
@@ -149,15 +149,16 @@ test('pay periods: biweekly anchor and semimonthly', () => {
   assert.equal(payPeriod(semi, '2026-10-02').end, '2026-10-15');
 });
 
-test('paychecks group shifts and estimate withholding', () => {
+test('paychecks group shifts and apply the job\'s own tax percentages', () => {
   const s = createSeed();
-  s.jobs = [{ id: 'j', name: 'Job', sourceId: 'side', rate: 20, payFrequency: 'weekly', periodEndAnchor: '2026-10-24', payLagDays: 6, otWeeklyThreshold: 40, otMultiplier: 1.5 }];
+  s.jobs = [{ id: 'j', name: 'Job', sourceId: 'side', rate: 20, payFrequency: 'weekly', periodEndAnchor: '2026-10-24', payLagDays: 6, otMultiplier: 1.5, tax: { mode: 'percent', rates: { federal: 0.1, socialSecurity: 0.062 } } }];
   s.shifts = [{ id: 'a', jobId: 'j', date: '2026-10-20', start: '09:00', end: '17:00', breakMin: 0 }];
   const [pc] = paychecks(s, { from: '2026-10-01', to: '2026-11-30' });
   assert.equal(pc.payday, '2026-10-30');
   close(pc.gross, 160);
-  assert.ok(pc.net < pc.gross && pc.net > 100);
   close(pc.socialSecurity, 160 * 0.062);
+  close(pc.federal, 16);
+  close(pc.net, 160 - 16 - 9.92);
 });
 
 test('salaried job produces paychecks without shifts', () => {
@@ -336,4 +337,22 @@ test('migration moves v1 investment rows into accounts without double counting',
   assert.equal(netWorth(v1).assets, before);
   migrate(v1); // idempotent
   assert.equal(v1.investing.accounts.length, 2);
+});
+
+test('overtime and taxes are manual by default', () => {
+  const s = createSeed();
+  s.jobs = [{ id: 'j', name: 'Job', sourceId: 'side', rate: 20, otMultiplier: 1.5, payFrequency: 'weekly', periodEndAnchor: '2026-10-24', payLagDays: 6 }];
+  // 50 hours in one week: nothing becomes overtime unless entered on a shift.
+  s.shifts = ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23'].map((date, i) => ({ id: `s${i}`, jobId: 'j', date, start: '08:00', end: '18:00', breakMin: 0 }));
+  let c = computeShifts(s);
+  assert.equal(c.reduce((a, x) => a + x.overtime, 0), 0);
+  s.shifts[4].otHours = 2;
+  c = computeShifts(s);
+  close(c.find((x) => x.id === 's4').overtime, 2);
+  close(c.find((x) => x.id === 's4').gross, 8 * 20 + 2 * 30);
+  const [pc] = paychecks(s, { from: '2026-10-01', to: '2026-11-30' });
+  assert.equal(pc.total, 0); // no tax taken out unless the job says so
+  close(pc.net, pc.gross);
+  s.jobs[0].tax = { mode: 'flat', flat: 50 };
+  close(paychecks(s, { from: '2026-10-01', to: '2026-11-30' })[0].net, pc.gross - 50);
 });

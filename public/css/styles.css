@@ -162,6 +162,12 @@ small, .small { font-size: 12px; }
 .view { padding: 24px; max-width: 1320px; width: 100%; outline: none; }
 .scrim { display: none; }
 
+/* ---------- Sign-in ---------- */
+.auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--page); }
+.auth-card { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; display: flex; flex-direction: column; gap: 14px; box-shadow: var(--shadow); }
+.auth-card h1 { font-size: 22px; }
+.auth-card p { margin: 0; }
+
 /* ---------- Section tabs & add menu ---------- */
 .subnav { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--page); overflow-x: auto; }
 .subnav a { padding: 10px 12px; color: var(--text-2); text-decoration: none; font-weight: 550; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }

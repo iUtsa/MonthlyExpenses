@@ -20,7 +20,32 @@ export async function render(el, ctx) {
   const usage = new Map();
   for (const tx of state.transactions) usage.set(tx.categoryId, (usage.get(tx.categoryId) || 0) + 1);
 
-  el.innerHTML = `
+  const account = ctx.user ? `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head"><div><h2>Your account</h2><p>${esc(ctx.user.email)}${ctx.user.isAdmin ? ' · site owner' : ''}</p></div>
+        <button class="btn" data-signout>Sign out</button></div>
+      <div class="grid cols-3">
+        <form class="stack" id="pwForm" style="gap:8px">
+          <h3>Change password</h3>
+          <input type="email" name="username" value="${esc(ctx.user.email)}" autocomplete="username" hidden>
+          <input type="password" name="current" placeholder="Current password" autocomplete="current-password" required>
+          <input type="password" name="next" placeholder="New password (8+ characters)" autocomplete="new-password" required minlength="8">
+          <button class="btn" type="submit">Update password</button>
+          <p class="small muted" style="margin:0">Signs you out on other devices.</p>
+        </form>
+        <div>
+          <h3>AI reading today</h3>
+          <p class="text-2" style="margin-top:6px">${ctx.ai.enabled ? (ctx.ai.limit ? `${Math.max(0, ctx.ai.limit - ctx.ai.used)} of ${ctx.ai.limit} reads left (resets at midnight UTC). After that, on-device reading still works.` : 'Unlimited for your account.') : 'AI reading is not configured on this site.'}</p>
+        </div>
+        <div>
+          <h3>Delete account</h3>
+          <p class="small text-2" style="margin:6px 0">Permanently erases your account, data and uploaded photos. Download a backup first if you want to keep anything.</p>
+          <button class="btn danger" data-action="delete-account">Delete my account…</button>
+        </div>
+      </div>
+    </div>` : '';
+
+  el.innerHTML = `${account}
     <div class="grid cols-2">
       <div class="card">
         <h2>Profile & assumptions</h2>
@@ -97,7 +122,7 @@ export async function render(el, ctx) {
       </div>
       <div class="card">
         <h2>Data</h2>
-        <p class="small muted">${ctx.ai.mode === 'browser' ? 'Everything is saved in this browser only. Use Backup to move it to another device.' : 'Everything is saved in <code>data/db.json</code> on this computer.'}</p>
+        <p class="small muted">${ctx.ai.mode === 'browser' ? 'Everything is saved in this browser only. Use Backup to move it to another device.' : 'Everything is saved to your account. Backup downloads a copy you can restore any time.'}</p>
         <div class="row" style="margin-top:12px">
           <button class="btn" data-action="backup">⇩ Backup (JSON)</button>
           <label class="btn">⇧ Restore backup<input type="file" id="restore" accept=".json,application/json" hidden></label>
@@ -121,6 +146,25 @@ export async function render(el, ctx) {
       else x[k] = k === 'weekStartsOn' ? Number(inp.value) : inp.value;
     });
     ctx.refresh();
+  });
+  $('#pwForm', el)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/api/auth/password', { method: 'POST', body: { current: f.current.value, next: f.next.value } });
+      f.reset();
+      toast('Password updated');
+    } catch (err) { toast(err.message, 'bad'); }
+  });
+  on(el, 'click', '[data-action=delete-account]', async () => {
+    const ok = await modal({
+      title: 'Delete your account?',
+      body: `<p>This permanently deletes <strong>${esc(ctx.user.email)}</strong>, all your budgets, transactions, shifts and uploaded photos. It can't be undone.</p>
+        <label class="field">Type your password to confirm<input type="password" name="password" required autocomplete="current-password"></label>`,
+      submitLabel: 'Delete everything',
+      onSubmit: async (form, v) => { await api('/api/auth/delete', { method: 'POST', body: { password: v.password } }); return true; },
+    });
+    if (ok) { location.hash = ''; location.reload(); }
   });
   on(el, 'change', '[data-names]', (e, inp) => {
     const names = inp.value.split(',').map((x) => x.trim()).filter(Boolean);
@@ -230,7 +274,7 @@ function loadDemo(month) {
     }
   });
   const jobId = uid('job');
-  update('jobs', (l) => l.push({ id: jobId, demo: true, name: 'Campus Café (demo)', sourceId: 'side', payType: 'hourly', rate: 16.5, payFrequency: 'biweekly', periodEndAnchor: addDays(today(), -((new Date().getDay() + 1) % 7)), payLagDays: 6, otMultiplier: 1.5, otWeeklyThreshold: 40, dailyOtThreshold: 0, preTaxPercent: 0, differentials: [{ id: uid('diff'), name: 'Weekend', amount: 1, start: '00:00', end: '00:00', days: [0, 6] }] }));
+  update('jobs', (l) => l.push({ id: jobId, demo: true, name: 'Campus Café (demo)', sourceId: 'side', payType: 'hourly', rate: 16.5, payFrequency: 'biweekly', periodEndAnchor: addDays(today(), -((new Date().getDay() + 1) % 7)), payLagDays: 6, otMultiplier: 1.5, autoOvertime: false, otWeeklyThreshold: 40, dailyOtThreshold: 0, preTaxPercent: 0, tax: { mode: 'none', rates: {}, flat: 0 }, differentials: [{ id: uid('diff'), name: 'Weekend', amount: 1, start: '00:00', end: '00:00', days: [0, 6] }] }));
   const shifts = [];
   for (let i = 0; i < 28; i++) {
     const date = addDays(`${month}-01`, i);

@@ -2,30 +2,44 @@
 
 A personal finance website built from `Monthly_Financial_Planner_Dynamic.xlsx`. It keeps every sheet of that workbook (Dashboard, Setup, Monthly Budget, Sinking Funds, Net Worth, Debt Tracker, Goals, Monthly Review, Research Notes) and adds receipt scanning, schedule-based earnings, transactions, bills, cash-flow forecasting, reports, and tax estimates.
 
-There are two ways to use it:
+Anyone can create an account. Each person's budgets, transactions, shifts and uploaded photos are private to their account.
 
-- **Hosted (GitHub Pages):** https://iutsa.github.io/MonthlyExpenses/. Nothing to install. Your data stays in that browser (IndexedDB), and nothing is sent to GitHub. Use **Settings → Backup** to move data between devices. Receipts and schedules are read with on-device OCR, or with Claude if you paste an Anthropic key in Settings. NVIDIA keys don't work here, because NVIDIA's API blocks calls made directly from web pages.
-- **Local (full version):** runs on your computer with `npm start`. Data is saved to `data/db.json`, and uploaded photos go to `data/uploads/`. AI reading works with an NVIDIA or an Anthropic key.
+## Use it online
 
-## Start (local)
+The live site runs on Render, with the database on Neon (free Postgres). See **Deploying** below.
+
+## Run it on your computer
 
 ```bash
 npm install        # first time only
-npm start          # then open http://localhost:3000
+npm start          # then open http://localhost:3000 and create your account
 ```
 
-Optional, for accurate AI reading of receipts, schedules and pay stubs:
+Locally the data lives in an embedded Postgres under `data/pglite`, so there's nothing to install. The first account created on a fresh install becomes the site owner, and it imports any data from the earlier single-user version (`data/db.json`).
 
-```bash
-cp .env.example .env    # then set NVIDIA_API_KEY=nvapi-...  (free at build.nvidia.com)
-npm start               #   or ANTHROPIC_API_KEY=sk-ant-...
-```
+For AI reading of receipts, schedules and pay stubs, put a key in `.env` (copy `.env.example`):
 
-- **NVIDIA** (used first when its key is set): `nvidia/nemotron-3.5-super-vl-120b-a12b`, falling back to `meta/llama-3.2-11b-vision-instruct` if the first is busy. Multi-page receipts and PDFs are stitched into one image first, because these models read one image per request.
-- **Anthropic:** `claude-opus-5-5`, with schema-enforced output and native PDF support.
-- **No key:** on-device OCR (Tesseract) plus keyword rules. Works on clear photos.
+- `NVIDIA_API_KEY=nvapi-…`, free at build.nvidia.com. The models are Nemotron 3.5 VL, falling back to Llama 3.2 Vision. Multi-page uploads are stitched into one image.
+- Or `ANTHROPIC_API_KEY=sk-ant-…` for Claude.
 
-Never commit `.env`; it is git-ignored.
+Without a key, on-device OCR (Tesseract) is used. Never commit `.env`; git ignores it.
+
+### Accounts and limits
+
+- Passwords are stored as scrypt hashes. Sessions are random tokens in HttpOnly, SameSite cookies, and only a hash of each token is stored. Sign-in attempts are rate-limited, and requests from other sites are rejected.
+- Everyone shares the site's AI key, with a cap of `AI_DAILY_LIMIT` reads per person per day (default 25). The site owner (`ADMIN_EMAIL`, or the first account) is unlimited. Once the cap is hit, reading falls back to on-device OCR.
+- Each account gets `USER_STORAGE_MB` (default 100) for uploaded photos.
+- Forgotten password: there's no email service, so the site owner resets it:
+  `DATABASE_URL=… npm run reset-password -- someone@example.com "new password"`
+- Anyone can delete their own account from Settings, which erases all their data.
+
+### Taxes and overtime are yours to set
+
+Nothing is estimated behind your back:
+
+- **Taxes:** each job's paycheck tax is "No tax (0%)" by default. You can switch it to your own percentages (federal, state, local, Social Security, Medicare, other) or a fixed amount per paycheck. A pay stub can fill in the percentages, but only when you click to use them.
+- **Overtime:** you enter overtime hours per shift. Automatic "after X hours per week" overtime is an opt-in setting on the job.
+- The Tax calculator tab is a planning tool only; it never changes paychecks.
 
 ## What's inside
 
@@ -68,19 +82,23 @@ Tested on five realistic schedules: a 6-person weekly grid with a look-alike nam
 - Net Worth liabilities disagreed with the Debt Tracker. Loans now live in one place.
 - The Debt Tracker only projected one month ahead.
 
+## Deploying (Render + Neon)
+
+1. **Database:** create a free project at neon.tech and copy its connection string (`postgresql://…?sslmode=require`).
+2. **App:** open https://render.com/deploy?repo=https://github.com/iUtsa/MonthlyExpenses and sign in with GitHub. Render reads `render.yaml` and asks for:
+   - `DATABASE_URL`: the Neon connection string
+   - `NVIDIA_API_KEY`: the shared AI key
+   - `ADMIN_EMAIL`: the site owner's email (unlimited AI reads)
+3. Click **Apply**. Every push to `main` redeploys, and a deploy only goes out if the tests pass.
+
+Render's free plan sleeps after 15 minutes idle, so the first visit afterwards takes about 30–50 seconds to wake up.
+
 ## Development
 
 ```bash
 npm run dev      # restart on server changes
-npm test         # unit tests for budget, debt, tax, shift, receipt and parser math
-npm run build    # static GitHub Pages build into dist/
-npm run preview  # build and serve dist/ at http://localhost:4173
+npm test         # unit tests (money math, parsers) + server tests (accounts, isolation, limits)
+npm run build    # optional browser-only build into dist/ (no accounts; data stays in the browser)
 ```
 
-Every push to `main` runs the tests, builds `dist/`, and deploys it to GitHub Pages (`.github/workflows/pages.yml`). The front end detects whether a server is present. If not, it uses `public/js/local-backend.js`, which keeps data in IndexedDB and calls the Anthropic API directly.
-
-The front end is plain ES modules in `public/js` (one file per page in `views/`) with no build step. `calc.js` holds all the financial math. The server (`server/`) is Express with a JSON-file store. Document reading (`public/js/ai-core.js`) is shared by the server and the static build.
-
-To open the app from your phone on the same Wi-Fi, set `HOST=0.0.0.0` in `.env`. There is no login, so only do this on a network you trust.
-
-Tax figures are 2026 federal estimates (IRS Rev. Proc. 2025-32) with a flat state rate. They are not tax advice.
+The front end is plain ES modules in `public/js` (one file per page in `views/`) with no build step. `calc.js` holds the financial math. The server is in `server/`: `app.js` (routes), `auth.js` (accounts), `store.js` (Postgres/PGlite) and `ai.js` (document reading, sharing `public/js/ai-core.js` with the browser build).

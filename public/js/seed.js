@@ -221,6 +221,13 @@ export function migrate(data) {
   }
   data.settings ||= {};
   data.settings.scheduleAliases ||= [];
+  // Taxes and overtime are manual: jobs without a tax setting take nothing out, and no job
+  // calculates overtime unless it opts in.
+  for (const job of data.jobs || []) {
+    job.tax ||= { mode: 'none', rates: {}, flat: 0 };
+    if (job.autoOvertime === undefined) job.autoOvertime = false;
+  }
+  if (data.settings.tax) { delete data.settings.tax.useStubRates; delete data.settings.tax.stubRates; }
   data.version = SCHEMA_VERSION;
   return data;
 }

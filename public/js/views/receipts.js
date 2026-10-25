@@ -244,6 +244,7 @@ async function processFiles(rawFiles, ctx) {
     toast(err.message, 'bad');
   } finally {
     busy = null;
+    ctx.refreshAi?.();
     ctx.refresh();
   }
 }
