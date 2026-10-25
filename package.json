@@ -1,0 +1,29 @@
+{
+  "name": "monthly-expenses",
+  "version": "1.0.0",
+  "description": "Personal finance manager: budgets, receipt scanning, schedule-based earnings, debts, goals, net worth.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/*.test.js",
+    "build": "node scripts/build-static.mjs",
+    "preview": "node scripts/build-static.mjs && npx --yes serve@14 dist -l 4173"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
+    "chart.js": "^4.6.1",
+    "express": "^4.22.3",
+    "multer": "^2.5.0",
+    "pdfjs-dist": "^4.10.38",
+    "tesseract.js": "^5.1.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
