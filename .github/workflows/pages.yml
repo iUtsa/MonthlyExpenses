@@ -25,7 +25,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run build
+      # The real app runs on Render; GitHub Pages only forwards visitors there.
+      - name: Build redirect page
+        run: |
+          mkdir -p dist
+          URL=https://monthly-expenses-maqc.onrender.com/
+          printf '<!doctype html><meta charset="utf-8"><title>Finance Manager</title><meta http-equiv="refresh" content="0; url=%s"><link rel="canonical" href="%s"><p>Finance Manager has moved to <a href="%s">%s</a>.</p>\n' "$URL" "$URL" "$URL" "$URL" > dist/index.html
+          cp dist/index.html dist/404.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

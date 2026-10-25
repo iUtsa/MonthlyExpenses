@@ -6,7 +6,7 @@ Anyone can create an account. Each person's budgets, transactions, shifts and up
 
 ## Use it online
 
-The live site runs on Render, with the database on Neon (free Postgres). See **Deploying** below.
+**https://monthly-expenses-maqc.onrender.com** runs on Render, with the database on Neon (free Postgres). The old GitHub Pages address redirects there. See **Deploying** below.
 
 ## Run it on your computer
 
