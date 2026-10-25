@@ -1,5 +1,5 @@
 import { state, update } from '../store.js';
-import { esc, money, fmtDate, uid, modal, confirmDialog, options, toast, on, sum, round2, today, monthLabel } from '../util.js';
+import { esc, money, fmtDate, uid, modal, confirmDialog, options, toast, on, sum, round2, today } from '../util.js';
 import { projectSaving } from '../calc.js';
 
 const PRIORITIES = ['High', 'Medium', 'Low'].map((p) => ({ id: p, name: p }));
@@ -12,18 +12,16 @@ export async function render(el, ctx) {
   const requiredMonthly = sum(rows, (r) => (r.f.dueDate ? r.p.requiredMonthly : r.f.monthly));
   const funded = rows.filter((r) => r.f.target > 0 && r.p.remaining === 0).length;
   const withTarget = rows.filter((r) => r.f.target > 0).length;
-  const planned = state.budgets[ctx.month]?.planned?.sinking_funds || 0;
 
   el.innerHTML = `
     <div class="alert info"><span class="alert-icon">i</span><div>Irregular expenses (car repairs, insurance, holidays, medical deductibles) are the #1 cause of budget failure. Divide each known cost by the months until it's due and treat it like a monthly bill. Set a due date and the app works out the monthly amount for you.</div></div>
     <div class="grid cols-4" style="margin-top:16px">
-      <div class="card tile"><span class="tile-label">Total monthly commitment</span><span class="tile-value">${money(totalMonthly, { cents: false })}</span><span class="tile-sub">${monthLabel(ctx.month, 'short')} budget line: ${money(planned, { cents: false })}</span></div>
+      <div class="card tile"><span class="tile-label">Total monthly commitment</span><span class="tile-value">${money(totalMonthly, { cents: false })}</span><span class="tile-sub">${money(totalMonthly * 12 / 26, { cents: false })} per biweekly paycheck · linked to your budget</span></div>
       <div class="card tile"><span class="tile-label">Needed to hit every due date</span><span class="tile-value ${requiredMonthly > totalMonthly + 1 ? 'neg' : ''}">${money(requiredMonthly, { cents: false })}</span><span class="tile-sub">per month</span></div>
       <div class="card tile"><span class="tile-label">Saved so far</span><span class="tile-value">${money(sum(funds, (f) => f.balance), { cents: false })}</span><span class="tile-sub">of ${money(sum(funds, (f) => f.target), { cents: false })}</span></div>
       <div class="card tile"><span class="tile-label">Fully funded</span><span class="tile-value">${funded} of ${withTarget}</span><span class="tile-sub">funds</span></div>
     </div>
     <div class="row" style="margin:16px 0 8px">
-      <button class="btn" data-action="to-budget">Send ${money(totalMonthly, { cents: false })} to ${monthLabel(ctx.month, 'short')} budget</button>
       <button class="btn" data-action="to-networth" title="Sets the Net Worth “Sinking Funds (total)” line. Emergency fund is excluded — it belongs in Savings.">Sync balances to Net Worth</button>
       <span class="spacer"></span>
       <button class="btn primary" data-action="add">+ Add fund</button>
@@ -63,11 +61,6 @@ export async function render(el, ctx) {
   on(el, 'click', '[data-del]', async (e, b) => {
     if (!(await confirmDialog('Delete this sinking fund?'))) return;
     update('sinkingFunds', (l) => l.filter((x) => x.id !== b.dataset.del));
-    ctx.refresh();
-  });
-  on(el, 'click', '[data-action=to-budget]', () => {
-    update('budgets', (b) => { b[ctx.month] ||= { income: {}, planned: {}, notes: {} }; b[ctx.month].planned.sinking_funds = round2(totalMonthly); });
-    toast(`Budget line “Sinking Funds Total Monthly” set to ${money(totalMonthly)}`);
     ctx.refresh();
   });
   on(el, 'click', '[data-action=to-networth]', () => {

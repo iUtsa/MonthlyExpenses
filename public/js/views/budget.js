@@ -1,10 +1,10 @@
 import { state, update } from '../store.js';
-import { esc, money, pct, on, toast, sum, shiftMonth, monthLabel, confirmDialog } from '../util.js';
-import { monthSummary, suggestPlan, BUCKETS } from '../calc.js';
+import { esc, money, pct, on, toast, sum, confirmDialog } from '../util.js';
+import { monthSummary, suggestPlan, BUCKETS, shiftRange } from '../calc.js';
 
-function ensure(month) {
-  update('budgets', (b) => { b[month] ||= { income: {}, planned: {}, notes: {} }; }, { silent: true });
-  return state.budgets[month];
+function ensure(key) {
+  update('budgets', (b) => { b[key] ||= { income: {}, planned: {}, notes: {} }; }, { silent: true });
+  return state.budgets[key];
 }
 
 // Planned-amount cell: linked values show as a badge-marked placeholder; typed values override.
@@ -18,17 +18,20 @@ function planInput(kind, r) {
 }
 
 function meterClass(actual, planned) {
-  if (!planned) return actual ? 'bad' : '';
+  if (!planned) return '';
   const r = actual / planned;
   return r > 1.0001 ? 'bad' : r > 0.9 ? 'warn' : '';
 }
 
 export async function render(el, ctx) {
-  const month = ctx.month;
-  const m = monthSummary(state, month);
+  const range = ctx.range;
+  const month = range.key; // budget key: 'P<payday>' for a paycheck, 'YYYY-MM' for a month
+  const m = monthSummary(state, range);
   const notes = state.budgets[month]?.notes || {};
+  const word = range.kind === 'period' ? 'paycheck' : 'month';
   const rta = m.remainingToAssign;
-  const prev = shiftMonth(month, -1);
+  const prevRange = shiftRange(state, range, -1);
+  const prev = prevRange.key;
   const sinkingTotal = sum(state.sinkingFunds, (f) => f.monthly);
   const minDebt = sum(state.debts.filter((d) => d.balance > 0), (d) => d.minPayment);
   const extraDebt = state.debtStrategy?.extraMonthly || 0;
@@ -57,8 +60,8 @@ export async function render(el, ctx) {
 
     <div class="card" style="margin-top:16px">
       <div class="row">
-        <strong>${monthLabel(month)}</strong><span class="spacer"></span>
-        <button class="btn small" data-action="copy">Copy plan from ${monthLabel(prev, 'short')}</button>
+        <strong>${range.kind === 'period' ? `Paycheck ${esc(range.label)}` : esc(range.label)}</strong><span class="spacer"></span>
+        <button class="btn small" data-action="copy">Copy plan from last ${word}</button>
         <button class="btn small" data-action="autofill">Auto-fill from ${esc(m.targets.rule)} targets</button>
         <button class="btn small danger" data-action="clear">Clear plan</button>
       </div>
@@ -125,7 +128,7 @@ export async function render(el, ctx) {
           <span>Actual expenses</span><span>${money(m.actualExpense)}</span>
           <span class="total">Actual surplus / (deficit)</span><span class="total ${m.surplus < 0 ? 'neg' : 'pos'}">${money(m.surplus)}</span>
         </div>
-        <label class="field" style="margin-top:14px">Notes for ${monthLabel(month, 'short')}<textarea rows="2" data-note data-key="budget-note">${esc(notes._month || '')}</textarea></label>
+        <label class="field" style="margin-top:14px">Notes for this ${word}<textarea rows="2" data-note data-key="budget-note">${esc(notes._month || '')}</textarea></label>
       </div>
     </div>`;
 
@@ -148,9 +151,9 @@ export async function render(el, ctx) {
   });
   on(el, 'click', '[data-action=copy]', () => {
     const src = state.budgets[prev];
-    if (!src) return toast(`No plan saved for ${monthLabel(prev)}`, 'bad');
+    if (!src) return toast(`No plan saved for ${prevRange.label}`, 'bad');
     update('budgets', (b) => { b[month] = { income: { ...src.income }, planned: { ...src.planned }, notes: { ...(b[month]?.notes || {}) } }; });
-    toast(`Copied ${monthLabel(prev)} plan`);
+    toast(`Copied the plan from ${prevRange.label}`);
     ctx.refresh();
   });
   on(el, 'click', '[data-action=autofill]', async () => {
@@ -164,7 +167,7 @@ export async function render(el, ctx) {
     ctx.refresh();
   });
   on(el, 'click', '[data-action=clear]', async () => {
-    if (!(await confirmDialog(`Clear the plan for ${monthLabel(month)}? Transactions are kept.`, { okLabel: 'Clear' }))) return;
+    if (!(await confirmDialog(`Clear the plan for ${range.label}? Transactions are kept.`, { okLabel: 'Clear' }))) return;
     update('budgets', (b) => { delete b[month]; });
     ctx.refresh();
   });

@@ -6,6 +6,17 @@ import {
 import { BILL_FREQUENCIES, monthlyEquivalent, billOccurrences, cashFlowForecast, paychecks } from '../calc.js';
 import { lineChart, seriesColor } from '../charts.js';
 
+// Records the payment as an expense and moves the bill to its next due date.
+export function markBillPaid(bill) {
+  const f = BILL_FREQUENCIES.find((x) => x.id === bill.frequency) || BILL_FREQUENCIES[2];
+  update('transactions', (l) => l.push({
+    id: uid('tx'), type: 'expense', date: bill.nextDue && bill.nextDue <= today() ? bill.nextDue : today(), amount: round2(bill.amount), merchant: bill.name,
+    categoryId: bill.categoryId, source: 'bill', billId: bill.id, note: bill.autopay ? 'Autopay' : '', createdAt: new Date().toISOString(),
+  }));
+  update('bills', () => { bill.nextDue = f.step(bill.nextDue || today()); });
+  toast(`${bill.name} paid · next due ${fmtDate(bill.nextDue)}`);
+}
+
 export async function render(el, ctx) {
   const bills = [...state.bills].sort((a, b) => (a.nextDue || '').localeCompare(b.nextDue || ''));
   const monthly = sum(bills, monthlyEquivalent);
@@ -76,17 +87,7 @@ export async function render(el, ctx) {
     update('bills', (l) => l.filter((x) => x.id !== b.dataset.del));
     ctx.refresh();
   });
-  on(el, 'click', '[data-pay]', (e, btn) => {
-    const bill = state.bills.find((x) => x.id === btn.dataset.pay);
-    const f = BILL_FREQUENCIES.find((x) => x.id === bill.frequency) || BILL_FREQUENCIES[2];
-    update('transactions', (l) => l.push({
-      id: uid('tx'), type: 'expense', date: bill.nextDue && bill.nextDue <= today() ? bill.nextDue : today(), amount: round2(bill.amount), merchant: bill.name,
-      categoryId: bill.categoryId, source: 'bill', billId: bill.id, note: bill.autopay ? 'Autopay' : '', createdAt: new Date().toISOString(),
-    }));
-    update('bills', () => { bill.nextDue = f.step(bill.nextDue || today()); });
-    toast(`${bill.name} recorded · next due ${fmtDate(bill.nextDue)}`);
-    ctx.refresh();
-  });
+  on(el, 'click', '[data-pay]', (e, btn) => { markBillPaid(state.bills.find((x) => x.id === btn.dataset.pay)); ctx.refresh(); });
   on(el, 'click', '[data-keep]', (e, b) => { update('bills', (l) => { l.find((x) => x.id === b.dataset.keep).lastReviewed = today(); }); ctx.refresh(); });
   on(el, 'click', '[data-cancel]', async (e, b) => {
     const bill = state.bills.find((x) => x.id === b.dataset.cancel);

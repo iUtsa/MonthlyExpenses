@@ -1,6 +1,6 @@
 import { state, update } from '../store.js';
-import { esc, money, on, monthLabel, shiftMonth, today, toast, fmtDate } from '../util.js';
-import { insights } from '../calc.js';
+import { esc, money, on, today, toast, fmtDate } from '../util.js';
+import { insights, shiftRange } from '../calc.js';
 
 const CHECKLIST = [
   ['1. Accounts & Transactions (5–8 min)', [
@@ -43,23 +43,26 @@ function save(month, fn) {
 }
 
 export async function render(el, ctx) {
-  const month = ctx.month;
+  const range = ctx.range;
+  const month = range.key; // review per paycheck (or per month in month mode)
+  const word = range.kind === 'period' ? 'paycheck' : 'month';
   const r = review(month);
-  const ins = insights(state, month);
+  const ins = insights(state, range);
   const done = Object.values(r.checked).filter(Boolean).length;
-  const next = shiftMonth(month, 1);
+  const nextRange = shiftRange(state, range, 1);
+  const next = nextRange.key;
 
   el.innerHTML = `
-    <div class="alert info"><span class="alert-icon">i</span><div>A consistent monthly review is the strongest predictor of long-term budgeting success. Budget 20–40 minutes; the app has already done the arithmetic below.</div></div>
+    <div class="alert info"><span class="alert-icon">i</span><div>A quick review each ${word} is the strongest predictor of sticking to a budget. 10–20 minutes is enough; the app has already done the arithmetic below.</div></div>
     <div class="grid cols-3" style="margin-top:16px">
       <div class="stack span-2">
         <div class="card">
-          <div class="card-head"><div><h2>${monthLabel(month)} review</h2><p>${done} of ${TOTAL} steps done${r.reviewDate ? ` · last opened ${fmtDate(r.reviewDate)}` : ''}</p></div>
+          <div class="card-head"><div><h2>${range.kind === 'period' ? `Paycheck ${esc(range.label)}` : esc(range.label)} review</h2><p>${done} of ${TOTAL} steps done${r.reviewDate ? ` · last opened ${fmtDate(r.reviewDate)}` : ''}</p></div>
             <div class="meter ${done === TOTAL ? 'good' : ''}" style="width:160px"><span style="width:${(done / TOTAL) * 100}%"></span></div></div>
           ${CHECKLIST.map(([section, items], si) => `<h3 style="margin:14px 0 6px">${esc(section)}</h3>
             ${items.map(([label, link], i) => {
     const key = `${si}.${i}`;
-    return `<div class="list-item" style="padding:6px 0"><label class="check grow"><input type="checkbox" data-check="${key}" ${r.checked[key] ? 'checked' : ''}> <span class="${r.checked[key] ? 'muted' : ''}">${esc(label)}</span></label>${link ? `<a class="btn small ghost" href="${link}">Open →</a>` : ''}${si === 4 && i === 3 ? `<button class="btn small" data-action="start-next">Copy to ${monthLabel(next, 'short')}</button>` : ''}</div>`;
+    return `<div class="list-item" style="padding:6px 0"><label class="check grow"><input type="checkbox" data-check="${key}" ${r.checked[key] ? 'checked' : ''}> <span class="${r.checked[key] ? 'muted' : ''}">${esc(label)}</span></label>${link ? `<a class="btn small ghost" href="${link}">Open →</a>` : ''}${si === 4 && i === 3 ? `<button class="btn small" data-action="start-next">Copy plan to next ${word}</button>` : ''}</div>`;
   }).join('')}`).join('')}
         </div>
         <div class="card">
@@ -80,7 +83,7 @@ export async function render(el, ctx) {
             <p class="small muted">Total ${money(ins.under.reduce((a, u) => a + u.by, 0), { cents: false })} could go to your emergency fund, a goal, or extra debt payments.</p>` : '<p class="small muted" style="margin-top:8px">Nothing unspent yet.</p>'}
         </div>
         <div class="card">
-          <h2>Biggest changes vs ${monthLabel(shiftMonth(month, -1), 'short')}</h2>
+          <h2>Biggest changes vs last ${word}</h2>
           ${ins.changes.length ? `<div class="list">${ins.changes.slice(0, 5).map((c) => `<div class="list-item"><span class="grow small">${esc(c.name)}</span><span class="num small ${c.delta > 0 ? 'neg' : 'pos'}">${c.delta > 0 ? '▲' : '▼'} ${money(Math.abs(c.delta), { cents: false })}</span></div>`).join('')}</div>` : '<p class="small muted" style="margin-top:8px">No change over $50.</p>'}
         </div>
         <div class="card"><div class="kv small">
@@ -100,10 +103,10 @@ export async function render(el, ctx) {
   on(el, 'change', '[data-cause]', (e, inp) => save(month, (x) => { x.causes ||= {}; x.causes[inp.dataset.cause] = inp.value; }));
   on(el, 'click', '[data-action=start-next]', () => {
     const src = state.budgets[month];
-    if (!src) return toast('No plan this month to copy', 'bad');
+    if (!src) return toast(`No plan this ${word} to copy`, 'bad');
     update('budgets', (b) => { b[next] = { income: { ...src.income }, planned: { ...src.planned }, notes: {} }; });
     save(month, (x) => { x.checked['4.3'] = true; });
-    toast(`${monthLabel(next)} budget started from ${monthLabel(month)}`);
+    toast(`Next ${word} (${nextRange.label}) planned from this one`);
     ctx.refresh();
   });
 }

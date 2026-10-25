@@ -1,149 +1,155 @@
-import { state, categoryName } from '../store.js';
-import { esc, money, pct, fmtDate, today, addDays, sum, monthLabel, monthsRange, statusBadge, $, on } from '../util.js';
+// Home: everything about the current paycheck (or month) on one screen —
+// how much is safe to spend, this paycheck, bills due before the next one,
+// the spending plan, and where money came from / went.
+import { state, update } from '../store.js';
+import { esc, money, fmtDate, today, addDays, sum, options, toast, on, $ } from '../util.js';
 import {
-  monthSummary, netWorth, emergencyFund, highInterestDebt, healthScore, roadmap, billOccurrences, paychecks, projectSaving,
-  computeShifts, investmentSummary,
+  safeToSpend, moneyFlow, paychecks, netWorth, emergencyFund, highInterestDebt, healthScore,
+  investmentSummary, computeShifts, planMode, planAnchor, PLAN_FREQUENCIES, suggestPlan, BUCKETS,
 } from '../calc.js';
-import { barChart, seriesColor, scoreRing } from '../charts.js';
+import { markBillPaid } from './bills.js';
+
+const day = (d) => fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' });
 
 export async function render(el, ctx) {
-  const m = monthSummary(state, ctx.month);
+  const r = ctx.range;
+  const needsPayday = planMode(state) === 'month' && state.settings.planning?.mode !== 'month' && !planAnchor(state);
+  const st = safeToSpend(state, r);
+  const m = st.summary;
+  const flow = moneyFlow(state, r);
+  const isPeriod = r.kind === 'period';
+  const current = today() >= r.from && today() <= r.to;
+  const pcs = paychecks(state, { from: r.from, to: r.to });
+  const nextPcs = isPeriod ? paychecks(state, { from: r.nextPayday, to: addDays(r.nextPayday, 13) }) : [];
+  const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
+  // Planned lines first (by bucket), then anything spent without a plan.
+  const plan = m.rows.filter((row) => row.planned > 0 || row.actual > 0).sort((a, b) => (b.planned > 0) - (a.planned > 0) || BUCKETS.findIndex((x) => x.id === a.type) - BUCKETS.findIndex((x) => x.id === b.type) || b.planned - a.planned);
+  const otherIncome = flow.incoming.filter((g) => !pcs.some((p) => p.job.name === g.name));
+  const week = computeShifts(state).filter((x) => x.date >= today() && x.date <= addDays(today(), 7));
   const nw = netWorth(state);
   const ef = emergencyFund(state);
-  const hi = highInterestDebt(state);
-  const score = healthScore(state, ctx.month);
-  const rm = roadmap(state, ctx.month);
-  const funds = state.sinkingFunds.filter((f) => f.target > 0);
-  const fundedCount = funds.filter((f) => projectSaving({ target: f.target, current: f.balance, monthly: f.monthly }).remaining === 0).length;
-  const months = monthsRange(ctx.month, 6);
-  const trend = months.map((mo) => monthSummary(state, mo));
-  const topCats = m.rows.filter((r) => r.actual > 0).sort((a, b) => b.actual - a.actual).slice(0, 8);
-
-  const soon = addDays(today(), 14);
-  const upcoming = [
-    ...state.bills.flatMap((b) => billOccurrences(b, today(), soon).map((d) => ({ date: d, label: b.name, amount: -b.amount, kind: 'bill' }))),
-    ...paychecks(state, { from: today(), to: soon }).map((p) => ({ date: p.payday, label: `${p.job.name} payday`, amount: p.net, kind: 'pay' })),
-  ].sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8);
-
-  const alerts = [];
-  for (const r of m.rows.filter((x) => x.planned > 0 && x.actual > x.planned).sort((a, b) => (b.actual - b.planned) - (a.actual - a.planned)).slice(0, 3)) {
-    alerts.push(['bad', '!', `<strong>${esc(r.name)}</strong> is ${money(r.actual - r.planned)} over budget.`]);
-  }
-  for (const r of m.rows.filter((x) => x.planned > 0 && x.actual <= x.planned && x.actual >= x.planned * 0.9).slice(0, 2)) {
-    alerts.push(['warn', '•', `<strong>${esc(r.name)}</strong> has used ${pct(r.actual / r.planned)} of its budget.`]);
-  }
-  if (m.uncategorized.length) alerts.push(['warn', '?', `${m.uncategorized.length} transactions need a category. <a href="#/transactions">Fix</a>`]);
-  if (m.plannedIncome && Math.abs(m.remainingToAssign) >= 1) alerts.push([m.remainingToAssign < 0 ? 'bad' : 'info', '$', `${money(Math.abs(m.remainingToAssign))} ${m.remainingToAssign < 0 ? 'over-planned' : 'still to assign'} in the ${monthLabel(ctx.month, 'short')} budget. <a href="#/budget">Plan it</a>`]);
-  if (state.debts.some((d) => d.balance > 0 && d.minPayment <= (d.balance * d.apr) / 12)) alerts.push(['bad', '!', 'A debt\'s minimum payment doesn\'t cover its interest. <a href="#/debts">Review</a>']);
-
-  const isEmpty = !m.hasPlan && !state.transactions.length;
-  const week = computeShifts(state).filter((x) => x.date >= today() && x.date <= addDays(today(), 7));
-  const nextPay = paychecks(state, { from: today(), to: addDays(today(), 31) })[0];
   const inv = investmentSummary(state);
+  const health = healthScore(state, r);
+  const periodWord = isPeriod ? 'paycheck' : 'month';
 
   el.innerHTML = `
-    <div class="grid cols-3" style="margin-bottom:16px">
+    ${needsPayday ? `<div class="card" style="margin-bottom:16px">
+      <div class="card-head"><div><h2>When do you get paid?</h2><p>Set one payday and everything — budget, bills, spending — is planned paycheck by paycheck.</p></div></div>
+      <form class="row" id="paydayForm">
+        <label class="field">A payday (last or next)<input type="date" name="payday" required value="${today()}"></label>
+        <label class="field">How often<select name="frequency">${options(PLAN_FREQUENCIES, 'biweekly')}</select></label>
+        <button class="btn primary" type="submit" style="align-self:flex-end">Plan by paycheck</button>
+        <button class="btn ghost" type="button" data-action="monthly" style="align-self:flex-end">I'd rather plan by month</button>
+      </form></div>` : ''}
+
+    <div class="grid cols-3">
       <div class="card span-2">
-        <div class="card-head"><div><h2>Add something</h2><p>Drop a file and it goes to the right place — expenses, shifts, paychecks and your budget update together.</p></div></div>
-        <div class="quick">
-          <label class="dropzone" data-drop="receipt"><div class="big">🧾</div><strong>Receipt</strong><div class="small muted">photo or PDF → sorted expenses</div><input type="file" accept="image/*,application/pdf" multiple hidden data-file="receipt"></label>
-          <label class="dropzone" data-drop="schedule"><div class="big">🗓</div><strong>Work schedule</strong><div class="small muted">screenshot, photo, PDF, CSV or .ics → shifts & pay</div><input type="file" accept="image/*,application/pdf,.csv,.xlsx,.xls,.ics,text/calendar" multiple hidden data-file="schedule"></label>
-        </div>
-        <div class="row" style="margin-top:12px">
-          <button class="btn small" data-quick="transaction">✎ Transaction</button>
-          <a class="btn small" href="#/income?tab=shifts&add=1">⏱ Shift</a>
-          <a class="btn small" href="#/bills">📅 Pay a bill</a>
-          <a class="btn small" href="#/investments">📈 Invest</a>
-          <a class="btn small" href="#/review">✓ Monthly review</a>
+        <div class="row between"><span class="tile-label">${current ? `Safe to spend until ${isPeriod ? `payday, ${day(st.nextPayday)}` : 'the end of the month'}` : `Left over ${isPeriod ? 'this paycheck' : 'this month'}`}</span>
+          ${current && st.daysLeft ? `<span class="badge info">${st.daysLeft} day${st.daysLeft > 1 ? 's' : ''} left</span>` : ''}</div>
+        <div class="hero-value ${st.safe < 0 ? 'neg' : ''}" style="margin:6px 0">${money(st.safe, { cents: false })}</div>
+        ${current && st.daysLeft && st.safe > 0 ? `<div class="text-2">That's about <strong>${money(st.perDay, { cents: false })} a day</strong> for groceries, gas, food and everything else.</div>` : ''}
+        ${st.safe < 0 ? `<div class="alert bad" style="margin-top:8px"><span class="alert-icon">!</span><div>You're <strong>${money(-st.safe, { cents: false })} short</strong> before ${isPeriod ? 'payday' : 'the month ends'}. Move money from savings, delay a set-aside, or cut spending.</div></div>` : ''}
+        <div class="kv" style="margin-top:14px;max-width:520px">
+          <span>Money in this ${periodWord}</span><span>${money(st.income)}</span>
+          <span>Spent & saved so far</span><span class="neg">−${money(st.spent)}</span>
+          <span>Bills still due</span><span class="neg">−${money(st.billsLeft)}</span>
+          <span>Savings & debt still to set aside</span><span class="neg">−${money(st.committedLeft)}</span>
+          <span class="total">Safe to spend</span><span class="total ${st.safe < 0 ? 'neg' : 'pos'}">${money(st.safe)}</span>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Coming up</h2><a class="btn small" href="#/income?tab=shifts">Shifts</a></div>
-        ${week.length ? `<div class="list">${week.slice(0, 5).map((x) => `<div class="list-item"><span class="grow"><div class="title">${fmtDate(x.date, { weekday: 'short', month: 'short', day: 'numeric' })}</div><div class="small muted">${x.start}–${x.end} · ${esc(x.job?.name || '')}</div></span><span class="num small">${money(x.gross, { cents: false })}</span></div>`).join('')}</div>` : '<p class="small muted">No shifts in the next 7 days. Drop your schedule on the left.</p>'}
-        ${nextPay ? `<div class="alert good" style="margin-top:10px"><span class="alert-icon">$</span><div class="small">Next payday <strong>${fmtDate(nextPay.payday, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>: about ${money(nextPay.net, { cents: false })} take-home</div></div>` : ''}
-        ${inv.accounts.length ? `<div class="kv small" style="margin-top:10px"><span>Invested</span><span>${money(inv.total, { cents: false })}</span><span>Adding monthly</span><span>${money(inv.monthlyYou + inv.monthlyMatch, { cents: false })}</span></div>` : ''}
-      </div>
-    </div>
-    ${isEmpty ? `<div class="card" style="margin-bottom:16px">
-      <div class="card-head"><div><h2>Welcome! Set up in four steps</h2><p>Your workbook's sinking funds, debts, goals and net worth are already loaded.</p></div></div>
-      <div class="grid cols-4">
-        <a class="btn" href="#/settings">1 · Check income & allocation rule</a>
-        <a class="btn" href="#/income">2 · Add your job & schedule</a>
-        <a class="btn" href="#/budget">3 · Plan ${monthLabel(ctx.month, 'short')}</a>
-        <a class="btn" href="#/receipts">4 · Scan your first receipt</a>
-      </div></div>` : ''}
-
-    <div class="grid cols-4">
-      ${tile('Planned income', money(m.plannedIncome, { cents: false }), `Actual ${money(m.actualIncome, { cents: false })}`)}
-      ${tile('Planned expenses', money(m.plannedExpense, { cents: false }), `Actual ${money(m.actualExpense, { cents: false })}`)}
-      ${tile('Remaining to assign', money(m.remainingToAssign, { cents: false }), Math.abs(m.remainingToAssign) < 1 ? '✓ Zero-based' : 'Goal: $0', m.remainingToAssign < 0 ? 'neg' : '')}
-      ${tile('Actual surplus / (deficit)', money(m.surplus, { cents: false }), `${monthLabel(ctx.month)}`, m.surplus < 0 ? 'neg' : 'pos')}
-      ${tile('Savings rate (actual)', pct(m.savingsRate), `Planned ${pct(m.plannedSavingsRate)}`)}
-      ${tile('Net worth', money(nw.net, { cents: false, compact: true }), `${money(nw.assets, { cents: false, compact: true })} assets · ${money(nw.liabilities, { cents: false, compact: true })} debt`, nw.net < 0 ? 'neg' : '')}
-      ${tile('Emergency fund', `${ef.months.toFixed(1)} months`, `${statusBadge(ef.status)}`)}
-      ${tile('High-interest debt', money(hi, { cents: false }), hi <= 0 ? '<span class="badge good">✓ Debt free!</span>' : hi < 5000 ? '<span class="badge warn">Manageable</span>' : '<span class="badge bad">! Focus here</span>')}
-    </div>
-
-    <div class="grid cols-3" style="margin-top:16px">
-      <div class="card span-2">
-        <div class="card-head"><div><h2>Allocation snapshot · actual vs target</h2><p>${esc(m.targets.rule)} rule · within ±5% counts as on track</p></div><a class="btn small" href="#/settings">Change rule</a></div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Bucket</th><th class="num">Actual $</th><th class="num">Actual %</th><th class="num">Target %</th><th class="num">Variance</th><th>Status</th><th style="width:30%">vs target</th></tr></thead>
-          <tbody>${m.allocation.map((a) => `<tr>
-            <td><span class="row"><span class="dot ${a.id}"></span>${a.label}</span></td>
-            <td class="num">${money(a.actual, { cents: false })}</td><td class="num">${pct(a.actualPct, 1)}</td><td class="num">${pct(a.target)}</td>
-            <td class="num">${(a.variance * 100).toFixed(1)}%</td><td>${statusBadge(a.status)}</td>
-            <td><div class="meter ${a.status === 'Over' ? 'bad' : ''}"><span style="width:${a.target ? Math.min(100, (a.actualPct / a.target) * 100) : 0}%"></span></div></td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Financial health</h2><span class="badge ${score.total >= 60 ? 'good' : score.total >= 40 ? 'warn' : 'bad'}">${score.grade}</span></div>
-        <div class="row" style="gap:16px;align-items:flex-start">
-          ${scoreRing(score.total)}
-          <div class="stack" style="gap:6px;flex:1;min-width:140px">${score.parts.map((p) => `<div title="${esc(p.detail)}"><div class="row between small"><span>${p.label}</span><span class="muted">${Math.round(p.score)}/${p.max}</span></div>
-            <div class="meter" style="height:5px"><span style="width:${(p.score / p.max) * 100}%"></span></div></div>`).join('')}</div>
-        </div>
-        <div class="alert info" style="margin-top:12px"><span class="alert-icon">→</span><div class="small"><strong>Next step:</strong> ${rm.current < rm.steps.length ? esc(rm.steps[rm.current].title) : 'Keep building wealth'} · <a href="#/goals">Roadmap</a></div></div>
+        <div class="card-head"><h2>This ${periodWord}'s pay</h2><a class="btn small" href="#/income">Income</a></div>
+        ${pcs.length ? `<div class="list">${pcs.map((p) => {
+    const tx = recorded.get(`${p.job.id}|${p.payday}`);
+    return `<div class="list-item"><span class="grow"><div class="title">${esc(p.job.name)}</div><div class="small muted">${day(p.payday)} · ${p.salary ? 'salary' : `${p.hours.toFixed(1)} h`}${tx?.estimated ? ' · estimated' : tx ? ' · received' : p.payday > today() ? ' · expected' : ''}</div></span><strong class="num pos">${money(tx && !tx.estimated ? tx.amount : p.net)}</strong></div>`;
+  }).join('')}</div>` : `<p class="small muted">${state.jobs.length ? 'No payday falls in this period.' : 'Add your job in Income & shifts and drop your schedule below — your pay shows up here.'}</p>`}
+        ${otherIncome.length ? `<div class="list">${otherIncome.map((g) => `<div class="list-item"><span class="grow">${esc(g.name)}</span><span class="num pos">${money(g.total)}</span></div>`).join('')}</div>` : ''}
+        ${nextPcs.length ? `<div class="alert good" style="margin-top:10px"><span class="alert-icon">$</span><div class="small">Next paycheck <strong>${day(nextPcs[0].payday)}</strong>: about ${money(sum(nextPcs, (p) => p.net), { cents: false })}</div></div>` : ''}
       </div>
     </div>
 
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card">
-        <div class="card-head"><div><h2>Spending by category</h2><p>${monthLabel(ctx.month)} · top ${topCats.length}</p></div><a class="btn small" href="#/reports">Reports</a></div>
-        ${topCats.length ? '<div class="chart-box"><canvas id="catChart" aria-label="Spending by category"></canvas></div>' : '<div class="empty">No spending recorded this month.</div>'}
+        <div class="card-head"><div><h2>Bills this ${periodWord}</h2><p>${st.bills.length ? `${money(st.billsLeft, { cents: false })} still to pay` : ''}</p></div><a class="btn small" href="#/bills">All bills</a></div>
+        ${st.bills.length ? `<div class="list">${st.bills.map((b) => `<div class="list-item">
+            <span class="grow"><div class="title">${esc(b.bill.name)}</div><div class="small muted">${day(b.date)}${b.bill.autopay ? ' · autopay' : ''}</div></span>
+            <span class="num">${money(b.amount)}</span>
+            ${b.paid ? '<span class="badge good">✓ paid</span>' : `<button class="btn small" data-pay="${b.bill.id}">Mark paid</button>`}</div>`).join('')}</div>`
+    : `<p class="small muted">No bills due between ${day(r.from)} and ${day(r.to)}. Add rent, phone and subscriptions in <a href="#/bills">Bills</a> so they show up in the right paycheck.</p>`}
       </div>
       <div class="card">
-        <div class="card-head"><div><h2>Income vs expenses</h2><p>Last 6 months</p></div></div>
-        <div class="chart-box"><canvas id="trendChart" aria-label="Income versus expenses"></canvas></div>
+        <div class="card-head"><div><h2>Spending plan</h2><p>${m.hasPlan ? `${money(m.actualExpense, { cents: false })} spent of ${money(m.plannedExpense, { cents: false })} planned` : `Nothing planned for this ${periodWord} yet`}</p></div><a class="btn small" href="#/budget">Edit plan</a></div>
+        ${plan.length ? `<div class="stack" style="gap:10px">${plan.slice(0, 9).map((row) => {
+    const unplanned = !row.planned;
+    const ratio = unplanned ? 0 : row.actual / row.planned;
+    return `<div><div class="row between small"><span class="row" style="flex-wrap:nowrap"><span class="dot ${row.type}"></span>${esc(row.name.replace(/\s*\(.*\)$/, ''))}</span><span class="${!unplanned && row.actual > row.planned + 0.5 ? 'neg' : 'muted'}">${money(row.actual, { cents: false })} ${unplanned ? '· not planned' : `/ ${money(row.planned, { cents: false })}`}</span></div>
+      ${unplanned ? '' : `<div class="meter ${ratio > 1 ? 'bad' : ratio > 0.9 ? 'warn' : ''}" style="height:6px;margin-top:4px"><span style="width:${Math.min(100, ratio * 100)}%"></span></div>`}</div>`;
+  }).join('')}</div>` : ''}
+        ${!m.hasPlan || m.plannedExpense < 1 ? `<button class="btn primary small" data-action="quick-plan" style="margin-top:12px" ${st.income ? '' : 'disabled'}>Plan this ${periodWord} from my ${esc(m.targets.rule)} targets</button>` : ''}
+      </div>
+    </div>
+
+    <div class="grid cols-2" style="margin-top:16px">
+      <div class="card">
+        <div class="card-head"><div><h2>Where money came from</h2><p>${money(flow.totalIn)} in · ${esc(r.label)}</p></div></div>
+        ${flow.incoming.length ? flow.incoming.map((g) => group(g, true)).join('') : '<p class="small muted">No income recorded in this period yet.</p>'}
+      </div>
+      <div class="card">
+        <div class="card-head"><div><h2>Where it went</h2><p>${money(flow.totalOut)} out · ${esc(r.label)}</p></div><a class="btn small" href="#/transactions">All</a></div>
+        ${flow.outgoing.length ? flow.outgoing.map((g) => group(g, false, flow.totalOut)).join('') : '<p class="small muted">No spending recorded yet. Scan a receipt or add a transaction.</p>'}
       </div>
     </div>
 
     <div class="grid cols-3" style="margin-top:16px">
-      <div class="card">
-        <h2>Alerts</h2>
-        <div class="stack" style="gap:8px;margin-top:10px">${alerts.length ? alerts.map(([k, i, t]) => `<div class="alert ${k}"><span class="alert-icon">${i}</span><div class="small">${t}</div></div>`).join('') : '<div class="alert good"><span class="alert-icon">✓</span><div class="small">All clear for this month.</div></div>'}
-          <div class="kv small" style="margin-top:6px">
-            <span>Sinking funds fully funded</span><span>${fundedCount} of ${funds.length}</span>
-            <span>Liquid cash</span><span>${money(ef.liquid, { cents: false })}</span>
-          </div>
+      <div class="card span-2">
+        <div class="card-head"><h2>Add something</h2></div>
+        <div class="quick">
+          <label class="dropzone" data-drop="receipt"><div class="big">🧾</div><strong>Receipt</strong><div class="small muted">photo or PDF → sorted expenses</div><input type="file" accept="image/*,application/pdf" multiple hidden></label>
+          <label class="dropzone" data-drop="schedule"><div class="big">🗓</div><strong>Work schedule</strong><div class="small muted">screenshot, photo, PDF, CSV or .ics → shifts & pay</div><input type="file" accept="image/*,application/pdf,.csv,.xlsx,.xls,.ics,text/calendar" multiple hidden></label>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn small" data-quick="transaction">✎ Transaction</button>
+          <a class="btn small" href="#/income?tab=shifts&add=1">⏱ Shift</a>
+          <a class="btn small" href="#/investments">📈 Invest</a>
+          <a class="btn small" href="#/review">✓ Review this ${periodWord}</a>
         </div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Next 14 days</h2><a class="btn small" href="#/bills">Bills</a></div>
-        ${upcoming.length ? `<div class="list">${upcoming.map((u) => `<div class="list-item"><span class="grow"><div class="title">${esc(u.label)}</div><div class="small muted">${fmtDate(u.date, { weekday: 'short', month: 'short', day: 'numeric' })}</div></span><span class="num ${u.amount > 0 ? 'pos' : ''}">${money(u.amount, { sign: true })}</span></div>`).join('')}</div>` : '<div class="empty small">Add bills and jobs to see what\'s coming.</div>'}
+        <div class="card-head"><h2>Next 7 days of work</h2></div>
+        ${week.length ? `<div class="list">${week.slice(0, 6).map((x) => `<div class="list-item"><span class="grow"><div class="title">${day(x.date)}</div><div class="small muted">${x.start}–${x.end} · ${esc(x.job?.name || '')}</div></span><span class="num small">${money(x.gross, { cents: false })}</span></div>`).join('')}</div>` : '<p class="small muted">No shifts coming up. Drop your schedule to add them.</p>'}
       </div>
-      <div class="card">
-        <div class="card-head"><h2>Recent transactions</h2><a class="btn small" href="#/transactions">All</a></div>
-        ${state.transactions.length ? `<div class="list">${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 7).map((t) => `<div class="list-item"><span class="grow"><div class="title">${esc(t.merchant || '—')}</div><div class="small muted">${fmtDate(t.date)} · ${t.type === 'expense' ? esc(categoryName(t.categoryId)) : t.type}</div></span><span class="num ${t.type === 'income' ? 'pos' : ''}">${t.type === 'income' ? '+' : ''}${money(t.amount)}</span></div>`).join('')}</div>` : '<div class="empty small">No transactions yet. <a href="#/receipts">Scan a receipt</a></div>'}
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="card-head"><h2>Big picture</h2><a class="btn small" href="#/reports">Reports</a></div>
+      <div class="grid cols-4">
+        <a class="tile" href="#/networth" style="text-decoration:none;color:inherit"><span class="tile-label">Net worth</span><span class="tile-value ${nw.net < 0 ? 'neg' : ''}">${money(nw.net, { cents: false, compact: true })}</span></a>
+        <a class="tile" href="#/sinking" style="text-decoration:none;color:inherit"><span class="tile-label">Emergency fund</span><span class="tile-value">${ef.months.toFixed(1)} mo</span><span class="tile-sub">goal ${state.settings.efTargetMonths} months</span></a>
+        <a class="tile" href="#/debts" style="text-decoration:none;color:inherit"><span class="tile-label">High-interest debt</span><span class="tile-value">${money(highInterestDebt(state), { cents: false })}</span></a>
+        <a class="tile" href="#/investments" style="text-decoration:none;color:inherit"><span class="tile-label">Invested</span><span class="tile-value">${money(inv.total, { cents: false, compact: true })}</span><span class="tile-sub">health score ${health.total}/100</span></a>
       </div>
     </div>`;
 
+  $('#paydayForm', el)?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    update('settings', (s) => { s.planning = { ...(s.planning || {}), mode: 'paycheck', frequency: f.frequency.value, payday: f.payday.value }; });
+    toast('Planning by paycheck — use ‹ › at the top to move between paychecks');
+    ctx.refresh();
+  });
+  on(el, 'click', '[data-action=monthly]', () => { update('settings', (s) => { s.planning = { ...(s.planning || {}), mode: 'month' }; }); ctx.refresh(); });
+  on(el, 'click', '[data-pay]', (e, b) => { markBillPaid(state.bills.find((x) => x.id === b.dataset.pay)); ctx.refresh(); });
+  on(el, 'click', '[data-action=quick-plan]', () => {
+    const suggested = suggestPlan(state, st.income);
+    for (const row of m.rows) if (row.link) delete suggested[row.id]; // keep bills/savings/debt lines linked
+    update('budgets', (b) => { b[r.key] = { income: { ...(b[r.key]?.income || {}) }, planned: suggested, notes: b[r.key]?.notes || {} }; });
+    toast(`Plan made for ${r.label} — adjust it any time in Budget`);
+    ctx.refresh();
+  });
   for (const zone of el.querySelectorAll('[data-drop]')) {
-    const kind = zone.dataset.drop;
     const start = async (files) => {
       if (!files.length) return;
-      if (kind === 'receipt') (await import('./receipts.js')).startReceipt([...files], ctx);
+      if (zone.dataset.drop === 'receipt') (await import('./receipts.js')).startReceipt([...files], ctx);
       else (await import('./income.js')).startSchedule([...files], ctx);
     };
     zone.querySelector('input').addEventListener('change', (e) => start(e.target.files));
@@ -155,23 +161,14 @@ export async function render(el, ctx) {
     const { openTransactionForm } = await import('./transactions.js');
     if (await openTransactionForm(ctx)) ctx.refresh();
   });
-
-  if (topCats.length) {
-    barChart($('#catChart', el), {
-      horizontal: true,
-      labels: topCats.map((r) => r.name.replace(/\s*\(.*\)$/, '')),
-      datasets: [{ label: 'Spent', data: topCats.map((r) => r.actual), color: seriesColor(1) }],
-    });
-  }
-  barChart($('#trendChart', el), {
-    labels: months.map((mo) => monthLabel(mo, 'short')),
-    datasets: [
-      { label: 'Income', data: trend.map((t) => t.actualIncome), color: seriesColor(1) },
-      { label: 'Expenses', data: trend.map((t) => t.actualExpense), color: seriesColor(2) },
-    ],
-  });
 }
 
-function tile(label, value, sub, cls = '') {
-  return `<div class="card tile"><span class="tile-label">${label}</span><span class="tile-value ${cls}">${value}</span><span class="tile-sub">${sub}</span></div>`;
+// One expandable line: total for a source/category, with its transactions inside.
+function group(g, incoming, total = 0) {
+  return `<details class="flow-group"><summary>
+      <span class="grow">${esc(g.name)} <span class="small muted">· ${g.items.length}</span></span>
+      ${total ? `<span class="flow-bar"><span style="width:${Math.max(2, (g.total / total) * 100)}%"></span></span>` : ''}
+      <strong class="num ${incoming ? 'pos' : ''}">${money(g.total)}</strong></summary>
+    <div class="flow-items">${g.items.map((t) => `<div class="row between small"><span>${fmtDate(t.date)} · ${esc(t.merchant || t.note || '—')}${t.estimated ? ' <span class="badge">estimated</span>' : ''}</span><span class="num">${money(t.amount)}</span></div>`).join('')}</div>
+  </details>`;
 }

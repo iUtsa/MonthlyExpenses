@@ -221,6 +221,8 @@ export function migrate(data) {
   }
   data.settings ||= {};
   data.settings.scheduleAliases ||= [];
+  // Plan paycheck by paycheck (every 2 weeks) unless the user chooses calendar months.
+  data.settings.planning ||= { mode: 'paycheck', frequency: 'biweekly', payday: '' };
   // Taxes and overtime are manual: jobs without a tax setting take nothing out, and no job
   // calculates overtime unless it opts in.
   for (const job of data.jobs || []) {

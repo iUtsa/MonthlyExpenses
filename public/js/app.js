@@ -1,14 +1,15 @@
 import { state, loadState, api, backendMode } from './store.js';
-import { $, esc, thisMonth, shiftMonth, toast, on } from './util.js';
+import { $, esc, today, toast, on } from './util.js';
+import { periodFor, shiftRange } from './calc.js';
 import { destroyCharts } from './charts.js';
 import { runAutomations } from './automation.js';
 
 // Sidebar sections; pages inside a section show as tabs under the title.
 const HUBS = [
-  { id: 'home', label: 'Home', icon: '◉', pages: [['dashboard', 'Overview']] },
+  { id: 'home', label: 'Home', icon: '◉', pages: [['dashboard', 'Home']] },
   { id: 'spending', label: 'Spending', icon: '⇄', pages: [['transactions', 'Transactions'], ['receipts', 'Scan receipts']] },
   { id: 'income', label: 'Income & shifts', icon: '⏱', pages: [['income', 'Income & shifts']] },
-  { id: 'budget', label: 'Budget & bills', icon: '▤', pages: [['budget', 'Monthly budget'], ['bills', 'Bills & cash flow']] },
+  { id: 'budget', label: 'Budget & bills', icon: '▤', pages: [['budget', 'Budget'], ['bills', 'Bills & cash flow']] },
   { id: 'save', label: 'Save & invest', icon: '▲', pages: [['investments', 'Investments'], ['goals', 'Goals'], ['sinking', 'Sinking funds'], ['networth', 'Net worth']] },
   { id: 'debt', label: 'Debt', icon: '⬇', pages: [['debts', 'Debt payoff']] },
   { id: 'insights', label: 'Insights', icon: '▥', pages: [['reports', 'Reports'], ['review', 'Monthly review'], ['guide', 'Research & guide']] },
@@ -18,7 +19,9 @@ const PAGES = new Map(HUBS.flatMap((h) => h.pages.map(([id, label]) => [id, { id
 const lastPage = {}; // remembers the last tab opened in each section
 
 const ctx = {
-  month: localStorageGet('month') || thisMonth(),
+  date: today(), // any day inside the period being viewed
+  range: null, // current period (a paycheck, or a calendar month)
+  month: today().slice(0, 7), // calendar month of that period, for month-based pages
   route: 'dashboard',
   params: new URLSearchParams(),
   ai: { enabled: false },
@@ -31,7 +34,6 @@ const ctx = {
 };
 window.__ctx = ctx;
 
-function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } }
 
 function renderNav(page) {
@@ -41,11 +43,28 @@ function renderNav(page) {
   sub.innerHTML = page.hub.pages.map(([id, label]) => `<a href="#/${id}" class="${id === page.id ? 'active' : ''}">${esc(label)}</a>`).join('');
 }
 
-function setMonth(month) {
-  ctx.month = month;
-  localStorageSet('month', month);
-  $('#monthInput').value = month;
+function setDate(date) {
+  ctx.date = date;
   render();
+}
+
+// The period shown everywhere follows Settings → "Plan my budget by" (each paycheck by default).
+function updatePeriod() {
+  if (!state.settings) return;
+  ctx.range = periodFor(state, ctx.date);
+  const r = ctx.range;
+  const t = today();
+  ctx.month = r.kind === 'month' ? r.key : (t >= r.from && t <= r.to ? t : r.from).slice(0, 7);
+  const current = t >= r.from && t <= r.to;
+  $('#periodLabel').innerHTML = r.kind === 'period' ? `<span class="muted">Paycheck · </span>${esc(r.label)}` : esc(r.label);
+  $('#dateInput').value = ctx.date;
+  let todayBtn = $('#todayBtn');
+  if (!current && !todayBtn) {
+    todayBtn = document.createElement('button');
+    todayBtn.id = 'todayBtn'; todayBtn.className = 'btn small today-btn'; todayBtn.textContent = 'Today';
+    todayBtn.addEventListener('click', () => setDate(today()));
+    $('#monthPicker').after(todayBtn);
+  } else if (current) todayBtn?.remove();
 }
 
 function renderAiBadge() {
@@ -75,6 +94,7 @@ async function render() {
   renderNav(page);
   renderAiBadge();
   runAutomations(state);
+  updatePeriod();
 
   // Keep focus and caret on the same logical input across re-renders.
   const active = document.activeElement;
@@ -134,11 +154,14 @@ async function runAdd(action) {
 }
 
 function initChrome() {
-  $('#monthInput').value = ctx.month;
-  $('#monthInput').addEventListener('change', (e) => e.target.value && setMonth(e.target.value));
+  $('#dateInput').addEventListener('change', (e) => e.target.value && setDate(e.target.value));
+  $('#periodLabel').addEventListener('click', () => { try { $('#dateInput').showPicker(); } catch { $('#dateInput').focus(); } });
   $('#monthPicker').addEventListener('click', (e) => {
     const step = e.target.closest('[data-step]')?.dataset.step;
-    if (step) setMonth(shiftMonth(ctx.month, Number(step)));
+    if (!step) return;
+    const next = shiftRange(state, ctx.range, Number(step));
+    const t = today();
+    setDate(t >= next.from && t <= next.to ? t : next.from);
   });
   const menu = $('#addMenu');
   menu.innerHTML = ADD_ACTIONS.map(([id, label]) => `<button data-add="${id}">${label}</button>`).join('');

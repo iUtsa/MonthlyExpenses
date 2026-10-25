@@ -2,8 +2,74 @@
 // and returns numbers — no DOM access — so they can be unit tested in Node.
 import {
   sum, round2, addDays, addMonths, parseDate, isoDate, today, daysBetween,
-  startOfWeek, daysInMonth, shiftMonth,
+  startOfWeek, daysInMonth, shiftMonth, fmtDate, monthLabel,
 } from './util.js';
+
+/* ======================================================================
+   Planning periods. Paycheck mode: each period runs from a payday to the day before the
+   next payday, so you plan with the money you actually have. Month mode: calendar months.
+   Functions below accept a period object or a 'YYYY-MM' month string.
+   ====================================================================== */
+export const PLAN_FREQUENCIES = [
+  { id: 'biweekly', name: 'Every 2 weeks' },
+  { id: 'weekly', name: 'Every week' },
+  { id: 'semimonthly', name: 'Twice a month (15th & last day)' },
+];
+const pad2 = (n) => String(n).padStart(2, '0');
+
+export function monthRange(month) {
+  const days = daysInMonth(month);
+  return { kind: 'month', key: month, from: `${month}-01`, to: `${month}-${pad2(days)}`, payday: null, nextPayday: null, days, label: monthLabel(month) };
+}
+
+function payRange(from, to) {
+  return { kind: 'period', key: `P${from}`, from, to, payday: from, nextPayday: addDays(to, 1), days: daysBetween(from, to) + 1, label: `${fmtDate(from)} – ${fmtDate(to)}` };
+}
+
+// A known payday: the one set in Settings, else the next payday of your first job.
+export function planAnchor(s) {
+  const p = s.settings.planning || {};
+  if (p.payday) return p.payday;
+  const job = s.jobs?.find((j) => ['biweekly', 'weekly'].includes(j.payFrequency));
+  return job ? payPeriod(job, today()).payday : null;
+}
+
+export const planMode = (s) => {
+  const p = s.settings.planning || {};
+  if (p.mode === 'month') return 'month';
+  return (p.frequency === 'semimonthly' || planAnchor(s)) ? 'paycheck' : 'month';
+};
+
+export function periodFor(s, date) {
+  const p = s.settings.planning || {};
+  if (planMode(s) === 'month') return monthRange(date.slice(0, 7));
+  if (p.frequency === 'semimonthly') {
+    const month = date.slice(0, 7);
+    const mid = `${month}-15`;
+    const last = `${month}-${pad2(daysInMonth(month))}`;
+    if (date >= mid && date < last) return payRange(mid, addDays(last, -1));
+    if (date >= last) return payRange(last, `${shiftMonth(month, 1)}-14`);
+    const prev = shiftMonth(month, -1);
+    return payRange(`${prev}-${pad2(daysInMonth(prev))}`, `${month}-14`);
+  }
+  const len = p.frequency === 'weekly' ? 7 : 14;
+  const offset = ((daysBetween(planAnchor(s), date) % len) + len) % len;
+  const from = addDays(date, -offset);
+  return payRange(from, addDays(from, len - 1));
+}
+
+export function shiftRange(s, range, n) {
+  let r = range;
+  for (let i = 0; i < Math.abs(n); i++) r = r.kind === 'month' ? monthRange(shiftMonth(r.key, n > 0 ? 1 : -1)) : periodFor(s, n > 0 ? addDays(r.to, 1) : addDays(r.from, -1));
+  return r;
+}
+export function rangesBack(s, range, count) {
+  const out = [range];
+  while (out.length < count) out.unshift(shiftRange(s, out[0], -1));
+  return out;
+}
+export const asRange = (x) => (typeof x === 'string' ? monthRange(x) : x);
+const inRange = (date, r) => date >= r.from && date <= r.to;
 
 /* ======================================================================
    Allocation rules (Setup sheet)
@@ -35,54 +101,66 @@ export function targets(settings) {
 /* ======================================================================
    Monthly budget (Monthly Budget + Dashboard sheets)
    ====================================================================== */
-export const monthTx = (s, month) => s.transactions.filter((t) => t.date?.startsWith(month));
+export const monthTx = (s, x) => { const r = asRange(x); return s.transactions.filter((t) => t.date && inRange(t.date, r)); };
 
-export function budgetFor(s, month) {
-  return s.budgets[month] || { income: {}, planned: {}, notes: {} };
+export function budgetFor(s, x) {
+  return s.budgets[asRange(x).key] || { income: {}, planned: {}, notes: {} };
 }
 
 // Budget lines other pages already know about. A value typed into the budget overrides these;
 // clearing it returns the line to its linked value.
-export function linkedPlan(s, month) {
+// Monthly amounts (sinking funds, debt payments, investing) are split by the period's length;
+// bills count on the dates they're actually due.
+export function linkedPlan(s, x) {
+  const r = asRange(x);
+  const share = r.kind === 'month' ? 1 : r.days / (365.25 / 12);
+  const per = r.kind === 'month' ? 'per month' : 'this paycheck’s share';
   const income = {};
   const planned = {};
-  const e = earningsForMonth(s, month);
+  const e = earningsForMonth(s, r);
   for (const j of e.byJob) {
     if (!j.job.sourceId || !j.paidNet) continue;
-    income[j.job.sourceId] ??= { value: 0, from: 'Expected take-home from your shifts' };
+    income[j.job.sourceId] ??= { value: 0, from: 'Take-home from your shifts paid in this period' };
     income[j.job.sourceId].value += j.paidNet;
   }
   const set = (id, value, from) => { if (value > 0) planned[id] = { value: round2(value), from }; };
-  set('sinking_funds', sum(s.sinkingFunds, (f) => f.monthly), 'Total of your sinking-fund contributions');
-  set('min_debt', sum(s.debts.filter((d) => d.balance > 0), (d) => d.minPayment), 'Minimum payments from Debt payoff');
-  if (s.debts.some((d) => d.balance > 0)) set('extra_debt', s.debtStrategy?.extraMonthly || 0, 'Extra payment from your payoff strategy');
+  set('sinking_funds', sum(s.sinkingFunds, (f) => f.monthly) * share, `Sinking-fund contributions (${per})`);
+  set('min_debt', sum(s.debts.filter((d) => d.balance > 0), (d) => d.minPayment) * share, `Debt minimum payments (${per})`);
+  if (s.debts.some((d) => d.balance > 0)) set('extra_debt', (s.debtStrategy?.extraMonthly || 0) * share, `Extra debt payment (${per})`);
   const inv = investmentSummary(s);
-  set('retirement', inv.byBucket.retirement, 'Monthly contributions to retirement accounts');
-  set('investing', inv.byBucket.investing, 'Monthly contributions to investment accounts');
+  set('retirement', inv.byBucket.retirement * share, `Retirement contributions (${per})`);
+  set('investing', inv.byBucket.investing * share, `Investment contributions (${per})`);
   const byCat = {};
-  for (const bill of s.bills || []) if (bill.categoryId) byCat[bill.categoryId] = (byCat[bill.categoryId] || 0) + monthlyEquivalent(bill);
-  for (const [id, v] of Object.entries(byCat)) if (!planned[id]) set(id, v, 'Your recurring bills in this category');
+  for (const bill of s.bills || []) {
+    if (!bill.categoryId) continue;
+    const due = billOccurrences(bill, r.from, r.to).length;
+    if (due) byCat[bill.categoryId] = (byCat[bill.categoryId] || 0) + due * (Number(bill.amount) || 0);
+  }
+  for (const [id, v] of Object.entries(byCat)) if (!planned[id]) set(id, v, 'Bills due in this period');
   for (const v of Object.values(income)) v.value = round2(v.value);
   return { income, planned };
 }
 
-export function monthSummary(s, month) {
-  const b = budgetFor(s, month);
-  const linked = linkedPlan(s, month);
+export function monthSummary(s, x) {
+  const range = asRange(x);
+  const month = range.key;
+  const b = budgetFor(s, range);
+  const linked = linkedPlan(s, range);
   const pick = (manual, link) => (manual !== undefined && manual !== null && manual !== ''
     ? { planned: Number(manual) || 0, auto: null, link: link || null }
     : { planned: link?.value || 0, auto: link || null, link: link || null });
-  const tx = monthTx(s, month);
+  const tx = monthTx(s, range);
   const expenses = tx.filter((t) => t.type === 'expense');
   const incomes = tx.filter((t) => t.type === 'income');
   const sourceIds = new Set(s.incomeSources.map((x) => x.id));
   const catIds = new Set(s.categories.map((c) => c.id));
 
-  const income = s.incomeSources.map((src) => ({
-    ...src,
-    ...pick(b.income[src.id], linked.income[src.id]),
-    actual: sum(incomes.filter((t) => (sourceIds.has(t.sourceId) ? t.sourceId : 'other') === src.id), (t) => t.amount),
-  }));
+  // Income with no typed or shift-based plan is planned as what actually came in.
+  const income = s.incomeSources.map((src) => {
+    const actual = sum(incomes.filter((t) => (sourceIds.has(t.sourceId) ? t.sourceId : 'other') === src.id), (t) => t.amount);
+    const link = linked.income[src.id] || (actual > 0 ? { value: round2(actual), from: 'Money that came in this period' } : null);
+    return { ...src, ...pick(b.income[src.id], link), actual };
+  });
 
   const rows = s.categories.map((c) => {
     const items = expenses.filter((t) => t.categoryId === c.id);
@@ -113,7 +191,7 @@ export function monthSummary(s, month) {
   });
 
   return {
-    month, income, rows, uncategorized, byType, allocation, targets: tgt,
+    month, range, income, rows, uncategorized, byType, allocation, targets: tgt,
     plannedIncome, actualIncome, plannedExpense, actualExpense,
     remainingToAssign: round2(plannedIncome - plannedExpense),
     surplus: round2(actualIncome - actualExpense),
@@ -473,9 +551,8 @@ export function paychecks(s, { from, to }) {
   return list.sort((a, b) => a.payday.localeCompare(b.payday));
 }
 
-export function earningsForMonth(s, month) {
-  const from = `${month}-01`;
-  const to = `${month}-${String(daysInMonth(month)).padStart(2, '0')}`;
+export function earningsForMonth(s, x) {
+  const { from, to } = asRange(x);
   const shifts = computeShifts(s).filter((c) => c.date >= from && c.date <= to);
   const checks = paychecks(s, { from, to });
   const byJob = s.jobs.map((job) => {
@@ -614,9 +691,10 @@ export function roadmap(s, month) {
 /* ======================================================================
    Month-end insights (Monthly Review sheet)
    ====================================================================== */
-export function insights(s, month) {
-  const m = monthSummary(s, month);
-  const prev = monthSummary(s, shiftMonth(month, -1));
+export function insights(s, x) {
+  const r = asRange(x);
+  const m = monthSummary(s, r);
+  const prev = monthSummary(s, shiftRange(s, r, -1));
   const over = m.rows.filter((r) => r.actual > r.planned + 0.5).map((r) => ({ ...r, by: r.actual - r.planned })).sort((a, b) => b.by - a.by);
   const under = m.rows.filter((r) => r.planned > 0 && r.actual < r.planned - 0.5).map((r) => ({ ...r, by: r.planned - r.actual })).sort((a, b) => b.by - a.by);
   const subs = s.bills.filter((b) => b.subscription);
@@ -784,3 +862,54 @@ export function goalCurrent(s, g) {
 }
 
 export const goalProgress = (s, g) => projectSaving({ ...g, current: goalCurrent(s, g) });
+
+/* ======================================================================
+   This paycheck at a glance
+   ====================================================================== */
+const billPaid = (s, bill, date, r) => s.transactions.some((t) => t.billId === bill.id && t.date >= addDays(date, -5) && t.date <= r.to);
+
+// "Safe to spend until next payday" = money in this period, minus what's already spent,
+// minus bills still due before the next payday, minus planned savings & debt not yet made.
+export function safeToSpend(s, x, asOf = today()) {
+  const r = asRange(x);
+  const m = monthSummary(s, r);
+  const income = Math.max(m.plannedIncome, m.actualIncome);
+  // Bills already paid this period (their due date has moved on) plus those still coming up.
+  const paidTx = s.transactions.filter((t) => t.billId && inRange(t.date, r));
+  const upcoming = (s.bills || []).flatMap((bill) => billOccurrences(bill, r.from, r.to).map((date) => ({ bill, date, amount: Number(bill.amount) || 0, paid: billPaid(s, bill, date, r) })));
+  const paid = paidTx.filter((t) => !upcoming.some((u) => u.paid && u.bill.id === t.billId))
+    .map((t) => ({ bill: s.bills.find((b) => b.id === t.billId) || { id: t.billId, name: t.merchant }, date: t.date, amount: t.amount, paid: true }));
+  const bills = [...paid, ...upcoming].sort((a, b) => a.date.localeCompare(b.date));
+  const billsLeft = sum(bills.filter((b) => !b.paid), (b) => b.amount);
+  const commitments = m.rows.filter((row) => row.type === 'savings' || row.id === 'min_debt')
+    .map((row) => ({ id: row.id, name: row.name, left: Math.max(0, row.planned - row.actual) })).filter((c) => c.left > 0.005);
+  const committedLeft = sum(commitments, (c) => c.left);
+  const safe = income - m.actualExpense - billsLeft - committedLeft;
+  const start = asOf < r.from ? r.from : asOf;
+  const daysLeft = asOf > r.to ? 0 : daysBetween(start, r.to) + 1;
+  return {
+    range: r, summary: m, income, spent: m.actualExpense, bills, billsLeft, commitments, committedLeft,
+    safe: round2(safe), daysLeft, perDay: daysLeft ? round2(Math.max(0, safe) / daysLeft) : 0,
+    nextPayday: r.nextPayday || addDays(r.to, 1),
+  };
+}
+
+// Where money came from and where it went in a period.
+export function moneyFlow(s, x) {
+  const r = asRange(x);
+  const tx = monthTx(s, r);
+  const sourceName = (id) => s.incomeSources.find((src) => src.id === id)?.name || 'Other income';
+  const group = (list, keyFn, nameFn) => {
+    const map = new Map();
+    for (const t of list) {
+      const k = keyFn(t);
+      if (!map.has(k)) map.set(k, { id: k, name: nameFn(t), total: 0, items: [] });
+      const g = map.get(k);
+      g.total += t.amount; g.items.push(t);
+    }
+    return [...map.values()].map((g) => ({ ...g, total: round2(g.total), items: g.items.sort((a, b) => b.date.localeCompare(a.date)) })).sort((a, b) => b.total - a.total);
+  };
+  const incoming = group(tx.filter((t) => t.type === 'income'), (t) => t.merchant || sourceName(t.sourceId), (t) => t.merchant || sourceName(t.sourceId));
+  const outgoing = group(tx.filter((t) => t.type === 'expense'), (t) => t.categoryId || '__none', (t) => s.categories.find((c) => c.id === t.categoryId)?.name || 'Uncategorized');
+  return { range: r, incoming, outgoing, totalIn: round2(sum(incoming, (g) => g.total)), totalOut: round2(sum(outgoing, (g) => g.total)) };
+}

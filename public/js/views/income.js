@@ -1,7 +1,7 @@
 import { state, update, api } from '../store.js';
 import {
   esc, money, pct, num, fmtDate, today, uid, modal, confirmDialog, options, toast, on, $, $$, sum, round2,
-  monthLabel, emptyState, parseCSV, loadScript, daysInMonth, addDays, startOfWeek,
+  emptyState, parseCSV, loadScript, addDays, startOfWeek,
 } from '../util.js';
 import {
   computeShifts, earningsForMonth, paychecks, yearTaxProjection, annualTax, shiftHours,
@@ -43,7 +43,8 @@ export async function render(el, ctx) {
 
 /* ====================== Overview ====================== */
 function overview(el, ctx) {
-  const e = earningsForMonth(state, ctx.month);
+  const e = earningsForMonth(state, ctx.range);
+  const word = ctx.range.kind === 'period' ? 'this paycheck' : 'this month';
   const upcoming = paychecks(state, { from: today(), to: addDays(today(), 45) });
   const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
 
@@ -56,11 +57,11 @@ function overview(el, ctx) {
       <div class="card tile"><span class="tile-label">Hours scheduled / worked</span><span class="tile-value">${num(e.hours, 1)}</span><span class="tile-sub">${num(e.overtime, 1)} overtime hrs</span></div>
       <div class="card tile"><span class="tile-label">Earned (by shift date)</span><span class="tile-value">${money(e.earned, { cents: false })}</span><span class="tile-sub">Gross incl. tips & differentials</span></div>
       <div class="card tile"><span class="tile-label">Paid this month (gross)</span><span class="tile-value">${money(e.paidGross, { cents: false })}</span><span class="tile-sub">${e.paychecks.length} paychecks</span></div>
-      <div class="card tile"><span class="tile-label">Expected take-home</span><span class="tile-value pos">${money(e.paidNet, { cents: false })}</span><span class="tile-sub"><button class="btn small" data-action="to-budget">Send to ${monthLabel(ctx.month, 'short')} budget</button></span></div>
+      <div class="card tile"><span class="tile-label">Expected take-home</span><span class="tile-value pos">${money(e.paidNet, { cents: false })}</span><span class="tile-sub">Paid ${word} — already in your budget</span></div>
     </div>
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card">
-        <div class="card-head"><div><h2>Weekly gross earnings</h2><p>${monthLabel(ctx.month)} · week starting</p></div></div>
+        <div class="card-head"><div><h2>Weekly gross earnings</h2><p>${esc(ctx.range.label)} · week starting</p></div></div>
         ${weeks.length ? '<div class="chart-box"><canvas id="weekChart" aria-label="Weekly earnings chart"></canvas></div>' : emptyState('📅', 'No shifts this month', 'Upload a schedule or add shifts.')}
       </div>
       <div class="card">
@@ -89,15 +90,6 @@ function overview(el, ctx) {
     });
   }
 
-  on(el, 'click', '[data-action=to-budget]', () => {
-    const bySource = {};
-    for (const j of e.byJob) if (j.job.sourceId) bySource[j.job.sourceId] = (bySource[j.job.sourceId] || 0) + j.paidNet;
-    update('budgets', (b) => {
-      b[ctx.month] ||= { income: {}, planned: {}, notes: {} };
-      for (const [src, v] of Object.entries(bySource)) b[ctx.month].income[src] = round2(v);
-    });
-    toast(`Planned income for ${monthLabel(ctx.month)} updated from your schedule`);
-  });
   on(el, 'click', '[data-record]', async (ev, b) => {
     const pc = [...e.paychecks, ...upcoming].find((p) => `${p.job.id}|${p.payday}` === b.dataset.record);
     if (!pc) return;
@@ -170,8 +162,8 @@ function paycheckModal(p) {
 
 /* ====================== Shifts ====================== */
 function shiftsTab(el, ctx) {
-  const month = ctx.month;
-  const computed = computeShifts(state).filter((s) => s.date.startsWith(month));
+  const range = ctx.range;
+  const computed = computeShifts(state).filter((s) => s.date >= range.from && s.date <= range.to);
   const weeks = new Map();
   for (const s of computed) { if (!weeks.has(s.week)) weeks.set(s.week, []); weeks.get(s.week).push(s); }
 
@@ -190,7 +182,7 @@ function shiftsTab(el, ctx) {
         </label>`}
       </div>
       <div class="card">
-        <h2>${monthLabel(month)}</h2>
+        <h2>${range.kind === 'period' ? 'This paycheck' : esc(range.label)}</h2><p class="small muted">${esc(range.label)}</p>
         <div class="kv" style="margin-top:10px">
           <span>Shifts</span><span>${computed.length}</span>
           <span>Hours</span><span>${num(sum(computed, (s) => s.hours), 1)}</span>
@@ -203,7 +195,7 @@ function shiftsTab(el, ctx) {
     <div id="pendingBox"></div>
     <div class="card" style="margin-top:16px">
       <div class="card-head"><h2>Calendar</h2></div>
-      ${calendar(month, computed)}
+      ${calendar(range, computed)}
     </div>
     <div class="card flush" style="margin-top:16px">
       <div class="card-head"><div><h2>Shifts by workweek</h2><p>Overtime is what you enter on each shift (✎) — nothing is added automatically.</p></div></div>
@@ -244,15 +236,16 @@ function shiftsTab(el, ctx) {
   on(el, 'click', '[data-del-shift]', (e, b) => { update('shifts', (l) => l.filter((s) => s.id !== b.dataset.delShift)); ctx.refresh(); });
 }
 
-function calendar(month, shifts) {
-  const first = `${month}-01`;
-  const start = startOfWeek(first, 0);
+// Whole weeks covering the period (two weeks for a biweekly paycheck).
+function calendar(range, shifts) {
+  const start = startOfWeek(range.from, 0);
   const cells = [];
   for (let d = start, i = 0; i < 42; i++, d = addDays(d, 1)) {
-    if (i >= 35 && !d.startsWith(month)) break;
+    if (d > range.to && i % 7 === 0) break;
     const list = shifts.filter((s) => s.date === d);
-    cells.push(`<div class="cal-day ${d.startsWith(month) ? '' : 'out'} ${d === today() ? 'today' : ''}">
-      <div class="cal-num">${Number(d.slice(8))}</div>
+    const inside = d >= range.from && d <= range.to;
+    cells.push(`<div class="cal-day ${inside ? '' : 'out'} ${d === today() ? 'today' : ''}">
+      <div class="cal-num">${range.kind === 'period' ? fmtDate(d) : Number(d.slice(8))}</div>
       ${list.map((s) => `<span class="cal-chip" title="${esc(s.job?.name || '')} ${s.start}–${s.end}">${s.start}–${s.end}</span>`).join('')}
     </div>`);
   }
@@ -298,7 +291,7 @@ async function readSchedule(files, ctx) {
       }
       if (!result) {
         busy = 'Reading text on this device…'; ctx.refresh();
-        result = parseScheduleText(await ocr(files), `${ctx.month}-01`);
+        result = parseScheduleText(await ocr(files), ctx.range.from);
       }
     }
     pending = {
@@ -430,7 +423,7 @@ function renderPending(box, ctx) {
 }
 
 async function shiftForm(shift, ctx) {
-  const s = shift || { jobId: state.jobs[0]?.id, date: `${ctx.month}-${String(Math.min(Number(today().slice(8)), daysInMonth(ctx.month))).padStart(2, '0')}`, start: '09:00', end: '17:00', breakMin: 30, tips: 0, role: '', notes: '' };
+  const s = shift || { jobId: state.jobs[0]?.id, date: today() >= ctx.range.from && today() <= ctx.range.to ? today() : ctx.range.from, start: '09:00', end: '17:00', breakMin: 30, tips: 0, role: '', notes: '' };
   return modal({
     title: shift ? 'Edit shift' : 'Add shift',
     body: `<div class="form-grid">

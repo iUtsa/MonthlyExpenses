@@ -29,7 +29,8 @@
         <div class="topbar-actions">
           <div class="month-picker" id="monthPicker">
             <button class="icon-btn" data-step="-1" aria-label="Previous month">‹</button>
-            <input type="month" id="monthInput" aria-label="Month">
+            <button type="button" class="period-label" id="periodLabel" title="Jump to a date"></button>
+            <input type="date" id="dateInput" class="sr-date" aria-label="Jump to date" tabindex="-1">
             <button class="icon-btn" data-step="1" aria-label="Next month">›</button>
           </div>
           <div class="add-wrap">

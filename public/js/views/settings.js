@@ -3,7 +3,7 @@ import { download } from '../util.js';
 import {
   esc, pct, uid, on, $, options, toast, confirmDialog, modal, today, addDays, shiftMonth, round2, monthsRange,
 } from '../util.js';
-import { RULES, incomeBracket, targets } from '../calc.js';
+import { RULES, incomeBracket, targets, PLAN_FREQUENCIES, planAnchor } from '../calc.js';
 import { exportWorkbook, importPlannerWorkbook } from '../exporter.js';
 
 const RULE_OPTIONS = [
@@ -45,7 +45,20 @@ export async function render(el, ctx) {
       </div>
     </div>` : '';
 
-  el.innerHTML = `${account}
+  const plan = s.planning || { mode: 'paycheck', frequency: 'biweekly', payday: '' };
+  const planningCard = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head"><div><h2>Plan my money by</h2><p>Everything — Home, budget, bills, reports — follows this.</p></div></div>
+      <div class="form-grid">
+        <label class="field">Plan by<select data-plan="mode">${options([{ id: 'paycheck', name: 'Each paycheck (payday to payday)' }, { id: 'month', name: 'Calendar month' }], plan.mode)}</select></label>
+        ${plan.mode === 'month' ? '' : `
+        <label class="field">I get paid<select data-plan="frequency">${options(PLAN_FREQUENCIES, plan.frequency)}</select></label>
+        ${plan.frequency === 'semimonthly' ? '' : `<label class="field">A payday (any past or upcoming one)<input type="date" data-plan="payday" value="${esc(plan.payday || planAnchor(state) || '')}"></label>`}`}
+      </div>
+      ${plan.mode !== 'month' && plan.frequency !== 'semimonthly' && !plan.payday && planAnchor(state) ? '<p class="small muted" style="margin-top:8px">Using the paydays from your job. Set a date here to override.</p>' : ''}
+    </div>`;
+
+  el.innerHTML = `${account}${planningCard}
     <div class="grid cols-2">
       <div class="card">
         <h2>Profile & assumptions</h2>
@@ -165,6 +178,10 @@ export async function render(el, ctx) {
       onSubmit: async (form, v) => { await api('/api/auth/delete', { method: 'POST', body: { password: v.password } }); return true; },
     });
     if (ok) { location.hash = ''; location.reload(); }
+  });
+  on(el, 'change', '[data-plan]', (e, inp) => {
+    update('settings', (x) => { x.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '', ...(x.planning || {}), [inp.dataset.plan]: inp.value }; });
+    ctx.refresh();
   });
   on(el, 'change', '[data-names]', (e, inp) => {
     const names = inp.value.split(',').map((x) => x.trim()).filter(Boolean);

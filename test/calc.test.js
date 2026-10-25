@@ -356,3 +356,58 @@ test('overtime and taxes are manual by default', () => {
   s.jobs[0].tax = { mode: 'flat', flat: 50 };
   close(paychecks(s, { from: '2026-10-01', to: '2026-11-30' })[0].net, pc.gross - 50);
 });
+
+test('biweekly paycheck periods run payday to the day before the next payday', async () => {
+  const { periodFor, shiftRange, monthRange } = await import('../public/js/calc.js');
+  const s = createSeed();
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '2026-10-16' };
+  const p = periodFor(s, '2026-10-25');
+  assert.deepEqual([p.from, p.to, p.nextPayday, p.days, p.key], ['2026-10-16', '2026-10-29', '2026-10-30', 14, 'P2026-10-16']);
+  assert.equal(periodFor(s, '2026-10-30').from, '2026-10-30');
+  assert.equal(periodFor(s, '2026-10-15').from, '2026-10-02');
+  assert.equal(shiftRange(s, p, 1).from, '2026-10-30');
+  assert.equal(shiftRange(s, p, -2).from, '2026-09-18');
+  s.settings.planning = { mode: 'paycheck', frequency: 'semimonthly' };
+  assert.deepEqual([periodFor(s, '2026-10-20').from, periodFor(s, '2026-10-20').to], ['2026-10-15', '2026-10-30']);
+  assert.deepEqual([periodFor(s, '2026-11-03').from, periodFor(s, '2026-11-03').to], ['2026-10-31', '2026-11-14']);
+  s.settings.planning = { mode: 'month' };
+  assert.deepEqual(periodFor(s, '2026-10-25'), monthRange('2026-10'));
+  // No payday known and no job: falls back to months until one is set.
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '' };
+  assert.equal(periodFor(s, '2026-10-25').kind, 'month');
+});
+
+test('paycheck budget: bills on their due dates, monthly amounts split, safe to spend', async () => {
+  const { periodFor, safeToSpend, moneyFlow, monthSummary } = await import('../public/js/calc.js');
+  const s = createSeed();
+  s.sinkingFunds = []; s.debts = []; s.investing.accounts = [];
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '2026-10-16' };
+  s.sinkingFunds = [{ id: 'sf', name: 'Car', target: 1000, balance: 0, monthly: 304.375 }];
+  s.bills = [
+    { id: 'rent', name: 'Rent', amount: 1200, categoryId: 'housing', frequency: 'monthly', nextDue: '2026-11-01' },
+    { id: 'phone', name: 'Phone', amount: 50, categoryId: 'internet_phone', frequency: 'monthly', nextDue: '2026-10-20' },
+  ];
+  s.transactions = [
+    { id: 'pay', type: 'income', date: '2026-10-16', amount: 1500, merchant: 'Campus Café', sourceId: 'side' },
+    { id: 'g', type: 'expense', date: '2026-10-18', amount: 80, categoryId: 'groceries', merchant: 'Kroger' },
+    { id: 'ph', type: 'expense', date: '2026-10-20', amount: 50, categoryId: 'internet_phone', merchant: 'Phone', billId: 'phone' },
+  ];
+  s.bills[1].nextDue = '2026-11-20'; // phone already marked paid
+  const oct = periodFor(s, '2026-10-25'); // Oct 16 – Oct 29: rent (Nov 1) is NOT in this paycheck
+  const m = monthSummary(s, oct);
+  assert.equal(m.rows.find((r) => r.id === 'housing').planned, 0);
+  assert.equal(Math.round(m.rows.find((r) => r.id === 'sinking_funds').planned), 140); // 304.375 × 14/30.44
+  const st = safeToSpend(s, oct, '2026-10-25');
+  assert.equal(st.income, 1500);
+  assert.equal(st.spent, 130);
+  assert.equal(st.billsLeft, 0);
+  assert.ok(st.bills.some((b) => b.bill.id === 'phone' && b.paid));
+  assert.equal(st.daysLeft, 5);
+  assert.equal(Math.round(st.safe), 1500 - 130 - 140);
+  const nov = periodFor(s, '2026-10-30'); // Oct 30 – Nov 12 includes rent on Nov 1
+  assert.equal(monthSummary(s, nov).rows.find((r) => r.id === 'housing').planned, 1200);
+  assert.equal(safeToSpend(s, nov, '2026-10-30').billsLeft, 1200);
+  const flow = moneyFlow(s, oct);
+  assert.equal(flow.totalIn, 1500);
+  assert.deepEqual(flow.outgoing.map((g) => [g.name.split(' ')[0], g.total]), [['Groceries', 80], ['Internet', 50]]);
+});

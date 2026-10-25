@@ -156,11 +156,27 @@ small, .small { font-size: 12px; }
 .topbar h1 { font-size: 20px; font-weight: 650; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .month-picker { display: flex; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
-.month-picker input { border: 0; background: transparent; width: 140px; padding: 6px 4px; }
+.period-label { border: 0; background: transparent; padding: 6px 8px; font-weight: 600; cursor: pointer; white-space: nowrap; color: var(--text); }
+.period-label .muted { font-weight: 500; }
+.sr-date { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.month-picker { position: relative; }
+.today-btn { margin-left: 4px; }
 .month-picker .icon-btn { border: 0; }
 .icon-btn.menu-btn { display: none; }
 .view { padding: 24px; max-width: 1320px; width: 100%; outline: none; }
 .scrim { display: none; }
+
+/* ---------- Money flow ---------- */
+.flow-group { border-bottom: 1px solid var(--border); }
+.flow-group:last-child { border-bottom: 0; }
+.flow-group summary { display: flex; align-items: center; gap: 10px; padding: 9px 0; cursor: pointer; list-style: none; }
+.flow-group summary::-webkit-details-marker { display: none; }
+.flow-group summary::before { content: '›'; color: var(--muted); width: 10px; transition: transform 0.15s; }
+.flow-group[open] summary::before { transform: rotate(90deg); }
+.flow-group .grow { flex: 1; min-width: 0; }
+.flow-bar { width: 90px; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); overflow: hidden; flex-shrink: 0; }
+.flow-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.flow-items { padding: 0 0 10px 20px; display: flex; flex-direction: column; gap: 4px; }
 
 /* ---------- Sign-in ---------- */
 .auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--page); }
@@ -373,7 +389,7 @@ tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 12p
   .form-grid .span-2 { grid-column: auto; }
   .subnav { padding: 0 12px; }
   .quick { grid-template-columns: minmax(0, 1fr); }
-  .month-picker input { width: 122px; }
+  .period-label .muted { display: none; }
   .cal-day { min-height: 54px; }
   .hero-value { font-size: 36px; }
 }

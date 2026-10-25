@@ -1,15 +1,15 @@
 import { state, update, categoryName } from '../store.js';
 import {
   esc, money, fmtDate, today, uid, modal, confirmDialog, options, toast, on, $, $$,
-  download, toCSV, parseCSV, round2, sum, monthLabel, emptyState, loadScript,
+  download, toCSV, parseCSV, round2, sum, emptyState, loadScript,
 } from '../util.js';
 import { autoCategorize } from '../calc.js';
 import { parseAnyDate, guessCsvColumns, toNumber } from '../parse.js';
 import { dismissPaycheck, replaceEstimate } from '../automation.js';
 
 const SOURCE_BADGE = { receipt: '🧾 Receipt', import: '⇩ Import', paycheck: '⏱ Paycheck', bill: '📅 Bill', manual: '' };
-let filters = { q: '', type: '', category: '', scope: 'month', source: '' };
-export function setFilters(next) { filters = { q: '', type: '', category: '', scope: 'month', source: '', ...next }; }
+let filters = { q: '', type: '', category: '', scope: 'period', source: '' };
+export function setFilters(next) { filters = { q: '', type: '', category: '', scope: 'period', source: '', ...next }; }
 
 export function learnRule(merchant, categoryId) {
   const match = String(merchant || '').trim().toLowerCase();
@@ -22,7 +22,7 @@ export function learnRule(merchant, categoryId) {
 }
 
 export async function openTransactionForm(ctx, tx = null, defaults = {}) {
-  const t = tx || { id: null, type: 'expense', date: ctx.month === today().slice(0, 7) ? today() : `${ctx.month}-01`, amount: '', merchant: '', categoryId: '', sourceId: 'salary', note: '', account: '', ...defaults };
+  const t = tx || { id: null, type: 'expense', date: today() >= ctx.range.from && today() <= ctx.range.to ? today() : ctx.range.from, amount: '', merchant: '', categoryId: '', sourceId: 'salary', note: '', account: '', ...defaults };
   const groups = ['need', 'want', 'savings'].map((type) => `<optgroup label="${{ need: 'Needs', want: 'Wants', savings: 'Savings & Debt' }[type]}">${options(state.categories.filter((c) => c.type === type), t.categoryId)}</optgroup>`).join('');
   return modal({
     title: tx ? 'Edit transaction' : 'Add transaction',
@@ -81,7 +81,7 @@ export async function openTransactionForm(ctx, tx = null, defaults = {}) {
 function filtered(ctx) {
   const q = filters.q.toLowerCase();
   return state.transactions
-    .filter((t) => (filters.scope === 'month' ? t.date?.startsWith(ctx.month) : true))
+    .filter((t) => (filters.scope === 'period' ? t.date >= ctx.range.from && t.date <= ctx.range.to : true))
     .filter((t) => !filters.type || t.type === filters.type)
     .filter((t) => !filters.category || (filters.category === '__none' ? t.type === 'expense' && !state.categories.some((c) => c.id === t.categoryId) : t.categoryId === filters.category))
     .filter((t) => !filters.source || (t.source || 'manual') === filters.source)
@@ -100,7 +100,7 @@ export async function render(el, ctx) {
       <div class="card">
         <div class="row">
           <input type="search" placeholder="Search merchant, note, amount…" value="${esc(filters.q)}" data-f="q" data-key="tx-search" style="flex:1;min-width:200px">
-          <select data-f="scope">${options([{ id: 'month', name: monthLabel(ctx.month) }, { id: 'all', name: 'All time' }], filters.scope)}</select>
+          <select data-f="scope">${options([{ id: 'period', name: ctx.range.kind === 'period' ? `This paycheck (${ctx.range.label})` : ctx.range.label }, { id: 'all', name: 'All time' }], filters.scope)}</select>
           <select data-f="type">${options([{ id: '', name: 'All types' }, { id: 'expense', name: 'Expenses' }, { id: 'income', name: 'Income' }, { id: 'transfer', name: 'Transfers' }], filters.type)}</select>
           <select data-f="category">${catOptions}</select>
           <select data-f="source">${options([{ id: '', name: 'Any source' }, { id: 'manual', name: 'Manual' }, { id: 'receipt', name: 'Receipts' }, { id: 'import', name: 'Imported' }, { id: 'paycheck', name: 'Paychecks' }, { id: 'bill', name: 'Bills' }], filters.source)}</select>

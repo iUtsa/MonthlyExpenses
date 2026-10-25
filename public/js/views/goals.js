@@ -5,7 +5,7 @@ import { goalProgress, goalCurrent, goalLinkOptions, roadmap } from '../calc.js'
 const STATUS = { 'On track': 'good', Behind: 'bad', Funded: 'good', 'No date': '', 'Not funded': 'warn' };
 
 export async function render(el, ctx) {
-  const rm = roadmap(state, ctx.month);
+  const rm = roadmap(state, ctx.range);
   const goals = state.goals.map((g) => ({ g, p: goalProgress(state, g), current: goalCurrent(state, g) }));
   const linkOpts = goalLinkOptions(state);
   const LINK_PAGE = { asset: ['networth', 'Net worth'], sinking: ['sinking', 'Sinking funds'], invest: ['investments', 'Investments'], debts: ['debts', 'Debt payoff'], debt: ['debts', 'Debt payoff'] };
