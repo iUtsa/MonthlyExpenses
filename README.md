@@ -29,21 +29,37 @@ Never commit `.env`; it is git-ignored.
 
 ## What's inside
 
-| Page | What it does |
+The sidebar has eight sections. Related pages sit as tabs at the top of each one, and **+ Add** (top right) scans a receipt, uploads a schedule, or adds a transaction from any page.
+
+| Section | What it does |
 |---|---|
-| **Dashboard** | Workbook KPIs, the allocation snapshot (actual vs target with ±5% status), a 0–100 health score, spending charts, alerts, and the next 14 days of bills and paydays |
-| **Transactions** | Add/edit, search and filter, bulk recategorize, bank/card CSV or Excel import (auto-categorized, duplicates skipped), CSV export. Re-categorizing a merchant teaches a rule |
-| **Scan receipts** | Upload a photo or PDF, or use the phone camera. The receipt is read into line items, each item gets a budget category, and tax/tip/discounts are shared out proportionally. Saving creates one expense per category, linked to the image |
-| **Monthly budget** | Zero-based plan vs actuals per category, dynamic targets, copy last month, auto-fill from targets, fill the sinking-fund and debt lines, use income projected from your schedule |
-| **Income & shifts** | Jobs (hourly or salary, overtime rules, night/weekend differentials, pay schedule). Upload a schedule as an image, PDF, XLSX/CSV or `.ics` to get shifts, hours, overtime, gross pay, estimated withholding and take-home per paycheck. Also pay-stub reading and a 2026 tax estimator, including the "no tax on tips/overtime" deductions and a FICA-exempt (F-1/J-1) option |
-| **Bills & cash flow** | Recurring bills and subscriptions, a due-date calendar with paydays, "mark paid", a subscription audit, and a 60-day checking-balance forecast |
-| **Sinking funds** | Workbook funds plus due dates that compute the monthly amount needed, contributions and withdrawals, and sending the total to the budget |
-| **Debt payoff** | Avalanche vs snowball vs minimums-only, simulated month by month with rollover: payoff dates, total interest, interest saved, a balance chart, payment logging |
-| **Goals** | Progress, projected finish date, required monthly amount for a target date, and an 8-step financial roadmap that ticks itself off |
-| **Net worth** | Assets (with liquid flags), liabilities pulled from Debt payoff, monthly snapshots, a trend chart |
-| **Reports** | 3/6/12-month income vs expenses, needs/wants/savings by month, savings rate, top merchants, category trends, Excel export |
-| **Monthly review** | The workbook checklist saved per month, with auto-computed overspending, under-spending, changes vs last month, and top-3 actions |
-| **Settings** | Profile, allocation rule (incl. Auto-by-income and Custom), categories and keywords, learned rules, JSON backup/restore, import the original planner `.xlsx`, demo data, reset |
+| **Home** | Drop a receipt or work schedule straight onto the page; upcoming shifts and next payday; workbook KPIs, allocation vs target, 0–100 health score, alerts |
+| **Spending** | Transactions (search, bulk edit, bank CSV/Excel import, learned merchant rules) and receipt scanning: each item is categorized, and tax/tip are split proportionally into one expense per category |
+| **Income & shifts** | Upload a schedule (screenshot, photo, PDF, XLSX/CSV, .ics). It finds **your** shifts by name, works out hours, overtime, differentials and tips, then shows each paycheck's taxes and take-home. Also pay stubs and a 2026 tax estimator |
+| **Budget & bills** | Zero-based monthly budget and recurring bills, with a 60-day cash-flow forecast |
+| **Save & invest** | Investments (401(k)/IRA/HSA/brokerage, employer match, 2026 limits, growth projection, FI number, allocation), goals, sinking funds, net worth |
+| **Debt** | Avalanche vs snowball vs minimums, simulated to payoff |
+| **Insights** | Reports, monthly review checklist, research notes |
+
+### How it's linked
+
+- **Shifts → paychecks → income → budget.** Each payday is added to income automatically as an estimate. Confirming it, uploading the pay stub, or importing the bank deposit replaces the estimate. Planned income for the month follows your schedule.
+- **Budget lines fill themselves** from the page that owns the number: bills, sinking-fund contributions, debt minimums and extra payment, and retirement/investing contributions. Typing a value overrides a line; ↺ links it again.
+- **Goals track real balances.** The emergency fund follows your savings, "Pay off credit cards" follows your card balances, and the vacation goal follows its sinking fund.
+- **Net worth** pulls loans from Debt and investments from Save & invest. This month's snapshot updates itself.
+
+### Reading your work schedule
+
+The app transcribes everyone on the roster, then picks out your rows in code by name ("Arnab", "Arnab Das", "A. Das"). Names that only look alike, like "Arnav", never match. Steps:
+
+1. On-device OCR text is passed to the model as a cross-check.
+2. The model (NVIDIA Nemotron 3.5 VL) reads the schedule three times independently (one reasoning pass and two fast ones). The readings are merged, and each shift shows how many readings agreed.
+3. Times like "1-5" or "3-11" are converted with fixed shift-schedule rules, not guessed.
+4. Shifts only one reading saw are marked **check**. Likely column slips are marked **misread?** and start unchecked.
+5. Your picture sits next to a day-by-day strip of your week, so a miss is easy to spot. **+ Add a shift it missed** covers anything left over.
+6. Re-uploading a changed week replaces that week's shifts instead of duplicating them.
+
+Tested on five realistic schedules: a 6-person weekly grid with a look-alike name, a dense 2-week grid, a dark phone screenshot, a day-column roster, and a tilted, blurred paper photo. Over 20 uploads, all 112 of Arnab's shifts were found. In the final configuration, every upload came out exactly right with no extra shifts. Each single reading made occasional mistakes (about 96% accurate); combining three is what makes it reliable. Expect 20–120 seconds per schedule on NVIDIA's free tier.
 
 ## Fixed from the workbook
 

@@ -12,6 +12,7 @@ const close = (a, b, eps = 0.01) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ 
 
 test('monthly summary buckets actuals by type (fixes the workbook off-by-one)', () => {
   const s = createSeed();
+  s.sinkingFunds = []; s.debts = []; s.investing.accounts = []; // no linked lines in this test
   s.budgets['2026-10'] = { income: { salary: 4000 }, planned: { housing: 1200, dining: 200, retirement: 300 }, notes: {} };
   s.transactions = [
     { id: '1', type: 'expense', date: '2026-10-02', amount: 1200, categoryId: 'housing' },
@@ -30,6 +31,22 @@ test('monthly summary buckets actuals by type (fixes the workbook off-by-one)', 
   assert.equal(m.surplus, 2250);
   close(m.savingsRate, 0.075);
   assert.equal(m.allocation.find((a) => a.id === 'want').status, 'Under'); // 6.25% vs 30% target
+});
+
+test('budget lines link to sinking funds, debts, investments and bills; typed values override', () => {
+  const s = createSeed();
+  s.investing.accounts[0].monthly = 250; // 401(k)
+  s.bills = [{ id: 'b', name: 'Rent', amount: 1450, categoryId: 'housing', frequency: 'monthly', nextDue: '2026-10-01' }];
+  s.budgets['2026-10'] = { income: {}, planned: { min_debt: 600 }, notes: {} };
+  const m = monthSummary(s, '2026-10');
+  const row = (id) => m.rows.find((r) => r.id === id);
+  assert.equal(row('sinking_funds').planned, 1225);
+  assert.ok(row('sinking_funds').auto);
+  assert.equal(row('min_debt').planned, 600); // typed value wins
+  assert.equal(row('min_debt').auto, null);
+  assert.equal(row('extra_debt').planned, 200);
+  assert.equal(row('retirement').planned, 250);
+  assert.equal(row('housing').planned, 1450);
 });
 
 test('emergency fund months use liquid assets like the workbook formula', () => {
@@ -234,4 +251,89 @@ test('NVIDIA replies are parsed and coerced to the schema', async () => {
   assert.equal(r.tax, 0);
   assert.deepEqual(Object.keys(r).sort(), Object.keys(schema.properties).sort());
   assert.throws(() => parseJsonReply('no json here'));
+});
+
+test('shift times follow schedule conventions and names never confuse look-alikes', async () => {
+  const { resolveShiftTimes, personMatches } = await import('../public/js/parse.js');
+  const t = (x) => { const r = resolveShiftTimes(x); return `${r.start}-${r.end}`; };
+  assert.equal(t('1-5'), '13:00-17:00');
+  assert.equal(t('9-1'), '09:00-13:00');
+  assert.equal(t('3-11'), '15:00-23:00');
+  assert.equal(t('4-12'), '16:00-00:00');
+  assert.equal(t('11p-7a'), '23:00-07:00');
+  assert.equal(t('4-10pm'), '16:00-22:00');
+  assert.equal(t('5:00 PM – 1:00 AM'), '17:00-01:00');
+  assert.equal(resolveShiftTimes('OFF'), null);
+  const me = ['Arnab', 'Arnab Das'];
+  assert.ok(personMatches('A. Das (Arnab)', me));
+  assert.ok(personMatches('ARNAB D.', me));
+  assert.ok(personMatches('A. Das', me));
+  assert.ok(!personMatches('Arnav Patel', me));
+  assert.ok(!personMatches('Barnab', me));
+});
+
+test('schedule readings merge with votes and normalized times/dates', async () => {
+  const { mergeScheduleReads } = await import('../public/js/ai-core.js');
+  const a = { people: ['Arnab Das', 'Sam'], shifts: [
+    { person: 'Arnab Das', date: '2026-11-02', time_text: '1-5', start: '01:00', end: '05:00' },
+    { person: 'Sam', date: '2026-11-02', time_text: '9-1', start: '09:00', end: '13:00' },
+  ] };
+  const b = { people: ['A. Das (Arnab)'], shifts: [
+    { person: 'A. Das (Arnab)', date: '11/2/2026', time_text: '1:00-5:00', start: '13:00', end: '17:00' },
+    { person: 'A. Das (Arnab)', date: '2026-11-04', time_text: '9-1', start: '09:00', end: '13:00' },
+  ] };
+  const m = mergeScheduleReads([a, b]);
+  assert.equal(m.readers, 2);
+  const mine = m.shifts.filter((x) => /das/i.test(x.person));
+  assert.equal(mine.length, 2);
+  const nov2 = mine.find((x) => x.date === '2026-11-02');
+  assert.deepEqual([nov2.start, nov2.end, nov2.votes], ['13:00', '17:00', 2]);
+  assert.equal(mine.find((x) => x.date === '2026-11-04').votes, 1);
+  // Column slip: with three readings, a lone shift next to a confirmed identical one is flagged.
+  const slip = { people: ['Arnab Das'], shifts: [{ person: 'Arnab Das', date: '2026-11-03', time_text: '1-5' }] };
+  const m3 = mergeScheduleReads([a, b, slip]);
+  assert.equal(m3.shifts.find((x) => x.date === '2026-11-03').suspect, true);
+  assert.equal(m3.shifts.find((x) => x.date === '2026-11-04').suspect, false);
+});
+
+test('investments: match, projection, FI number, net worth and budget links', async () => {
+  const { employerMatch, projectGrowth, retirementPlan, investmentSummary } = await import('../public/js/calc.js');
+  const acct = { type: '401k', monthly: 200, employerMatchRate: 0.5, employerMatchUpTo: 0.06 };
+  const m = employerMatch(acct, 60000); // cap = 300/mo
+  close(m.monthly, 100); close(m.missed, 50); close(m.needed, 300);
+  const g = projectGrowth({ start: 1000, monthly: 100, annualReturn: 0, inflation: 0, years: 2 });
+  close(g.at(-1), 1000 + 2400);
+  const s = createSeed();
+  s.investing.accounts[0].monthly = 300;
+  s.investing.settings = { ...s.investing.settings, currentAge: 30, retireAge: 60, retirementSpending: 40000, withdrawalRate: 0.04 };
+  const plan = retirementPlan(s);
+  assert.equal(plan.fiNumber, 1000000);
+  assert.ok(plan.atRetirement > 33000);
+  assert.equal(investmentSummary(s).total, 33000);
+  assert.equal(netWorth(s).investments, 33000);
+});
+
+test('goals follow linked balances', async () => {
+  const { goalCurrent } = await import('../public/js/calc.js');
+  const s = createSeed();
+  const cards = s.goals.find((g) => g.link === 'debts:credit_card');
+  assert.equal(goalCurrent(s, cards), 0);
+  s.debts.find((d) => d.name === 'Credit Card 2').balance = 200; // paid 1,000 off
+  assert.equal(goalCurrent(s, cards), 1000);
+  const ef = s.goals.find((g) => g.link === 'asset:savings');
+  s.netWorth.assets.find((a) => a.id === 'savings').value = 5000;
+  assert.equal(goalCurrent(s, ef), 5000);
+});
+
+test('migration moves v1 investment rows into accounts without double counting', async () => {
+  const { migrate } = await import('../public/js/seed.js');
+  const v1 = createSeed();
+  delete v1.investing;
+  v1.netWorth.assets.push({ id: 'retirement', name: 'Retirement Accounts (401k/IRA)', value: 25000, liquid: false }, { id: 'investments', name: 'Investment / Brokerage', value: 8000, liquid: false });
+  const before = v1.netWorth.assets.reduce((a, x) => a + x.value, 0);
+  migrate(v1);
+  assert.equal(v1.investing.accounts.length, 2);
+  assert.equal(netWorth(v1).assets, before);
+  migrate(v1); // idempotent
+  assert.equal(v1.investing.accounts.length, 2);
 });

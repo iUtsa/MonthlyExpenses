@@ -87,7 +87,9 @@ app.post('/api/ai/receipt', asyncRoute(async (req, res) => {
 
 app.post('/api/ai/schedule', asyncRoute(async (req, res) => {
   const files = resolveUploads(req.body.files);
-  res.json(await parseSchedule({ files, person: req.body.person || db.getAll().settings.schedulePerson, today: today() }));
+  const settings = db.getAll().settings;
+  const aliases = req.body.aliases || [settings.schedulePerson, ...(settings.scheduleAliases || [])].filter(Boolean);
+  res.json(await parseSchedule({ files, aliases, today: today(), debug: Boolean(req.body.debug) }));
 }));
 
 app.post('/api/ai/paystub', asyncRoute(async (req, res) => {

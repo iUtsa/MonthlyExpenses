@@ -1,27 +1,21 @@
 import { state, loadState, api } from './store.js';
-import { $, esc, thisMonth, shiftMonth, toast } from './util.js';
+import { $, esc, thisMonth, shiftMonth, toast, on } from './util.js';
 import { destroyCharts } from './charts.js';
+import { runAutomations } from './automation.js';
 
-const ROUTES = [
-  { group: 'Overview' },
-  { id: 'dashboard', label: 'Dashboard', icon: '◉' },
-  { group: 'Money in & out' },
-  { id: 'transactions', label: 'Transactions', icon: '⇄' },
-  { id: 'receipts', label: 'Scan receipts', icon: '🧾' },
-  { id: 'budget', label: 'Monthly budget', icon: '▤' },
-  { id: 'income', label: 'Income & shifts', icon: '⏱' },
-  { id: 'bills', label: 'Bills & cash flow', icon: '📅' },
-  { group: 'Plan' },
-  { id: 'sinking', label: 'Sinking funds', icon: '🪣' },
-  { id: 'debts', label: 'Debt payoff', icon: '⬇' },
-  { id: 'goals', label: 'Goals', icon: '◎' },
-  { id: 'networth', label: 'Net worth', icon: '▲' },
-  { group: 'Review' },
-  { id: 'reports', label: 'Reports', icon: '▥' },
-  { id: 'review', label: 'Monthly review', icon: '✓' },
-  { id: 'guide', label: 'Research & guide', icon: '📖' },
-  { id: 'settings', label: 'Settings', icon: '⚙' },
+// Sidebar sections; pages inside a section show as tabs under the title.
+const HUBS = [
+  { id: 'home', label: 'Home', icon: '◉', pages: [['dashboard', 'Overview']] },
+  { id: 'spending', label: 'Spending', icon: '⇄', pages: [['transactions', 'Transactions'], ['receipts', 'Scan receipts']] },
+  { id: 'income', label: 'Income & shifts', icon: '⏱', pages: [['income', 'Income & shifts']] },
+  { id: 'budget', label: 'Budget & bills', icon: '▤', pages: [['budget', 'Monthly budget'], ['bills', 'Bills & cash flow']] },
+  { id: 'save', label: 'Save & invest', icon: '▲', pages: [['investments', 'Investments'], ['goals', 'Goals'], ['sinking', 'Sinking funds'], ['networth', 'Net worth']] },
+  { id: 'debt', label: 'Debt', icon: '⬇', pages: [['debts', 'Debt payoff']] },
+  { id: 'insights', label: 'Insights', icon: '▥', pages: [['reports', 'Reports'], ['review', 'Monthly review'], ['guide', 'Research & guide']] },
+  { id: 'settings', label: 'Settings', icon: '⚙', pages: [['settings', 'Settings']] },
 ];
+const PAGES = new Map(HUBS.flatMap((h) => h.pages.map(([id, label]) => [id, { id, label, hub: h }])));
+const lastPage = {}; // remembers the last tab opened in each section
 
 const ctx = {
   month: localStorageGet('month') || thisMonth(),
@@ -40,10 +34,11 @@ window.__ctx = ctx;
 function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } }
 
-function renderNav() {
-  $('#nav').innerHTML = ROUTES.map((r) => (r.group
-    ? `<div class="nav-group-label nav-group">${esc(r.group)}</div>`
-    : `<a class="nav-link ${ctx.route === r.id ? 'active' : ''}" href="#/${r.id}"><span class="nav-icon" aria-hidden="true">${r.icon}</span>${esc(r.label)}</a>`)).join('');
+function renderNav(page) {
+  $('#nav').innerHTML = HUBS.map((h) => `<a class="nav-link ${page.hub === h ? 'active' : ''}" href="#/${lastPage[h.id] || h.pages[0][0]}"><span class="nav-icon" aria-hidden="true">${h.icon}</span>${esc(h.label)}</a>`).join('');
+  const sub = $('#subnav');
+  sub.classList.toggle('hidden', page.hub.pages.length < 2);
+  sub.innerHTML = page.hub.pages.map(([id, label]) => `<a href="#/${id}" class="${id === page.id ? 'active' : ''}">${esc(label)}</a>`).join('');
 }
 
 function setMonth(month) {
@@ -54,19 +49,22 @@ function setMonth(month) {
 }
 
 function renderAiBadge() {
+  const provider = ctx.ai.provider === 'nvidia' ? 'NVIDIA' : 'Claude';
   $('#aiBadge').innerHTML = ctx.ai.enabled
-    ? `<span class="badge good">✓ AI parsing on</span><div class="small muted" style="margin-top:4px">${esc(ctx.ai.model)}</div>`
-    : `<span class="badge">On-device OCR</span><div class="small muted" style="margin-top:4px">Add an Anthropic API key ${ctx.ai.mode === 'browser' ? 'in <a href="#/settings">Settings</a>' : 'to .env'} for more accurate receipt & schedule reading.</div>`;
+    ? `<span class="badge good">✓ AI reading on</span><div class="small muted" style="margin-top:4px">${provider} · ${esc(ctx.ai.model)}</div>`
+    : `<span class="badge">On-device OCR</span><div class="small muted" style="margin-top:4px">${ctx.ai.mode === 'browser' ? 'Add an Anthropic key in <a href="#/settings">Settings</a>' : 'Add an NVIDIA or Anthropic key to .env'} for more accurate receipt & schedule reading.</div>`;
 }
 
 let renderToken = 0;
 async function render() {
   const token = ++renderToken;
-  const route = ROUTES.find((r) => r.id === ctx.route) || ROUTES[1];
-  $('#pageTitle').textContent = route.label;
-  document.title = `${route.label} · Finance Manager`;
-  renderNav();
+  const page = PAGES.get(ctx.route) || PAGES.get('dashboard');
+  lastPage[page.hub.id] = page.id;
+  $('#pageTitle').textContent = page.hub.pages.length > 1 ? page.hub.label : page.label;
+  document.title = `${page.label} · Finance Manager`;
+  renderNav(page);
   renderAiBadge();
+  runAutomations(state);
 
   // Keep focus and caret on the same logical input across re-renders.
   const active = document.activeElement;
@@ -75,7 +73,7 @@ async function render() {
 
   let view = $('#view');
   try {
-    const mod = await import(`./views/${route.id}.js`);
+    const mod = await import(`./views/${page.id}.js`);
     if (token !== renderToken) return;
     destroyCharts();
     // Fresh element each render so delegated listeners from the last render are dropped.
@@ -95,12 +93,34 @@ async function render() {
 
 function onRoute() {
   const [path, query] = location.hash.replace(/^#\/?/, '').split('?');
-  ctx.route = ROUTES.some((r) => r.id === path) ? path : 'dashboard';
+  ctx.route = PAGES.has(path) ? path : 'dashboard';
   ctx.params = new URLSearchParams(query || '');
   $('#sidebar').classList.remove('open');
   $('#scrim').classList.remove('open');
   window.scrollTo(0, 0);
   render();
+}
+
+// "+ Add" menu: the everyday actions, reachable from every page.
+const ADD_ACTIONS = [
+  ['transaction', '✎ Transaction'],
+  ['receipt', '🧾 Scan a receipt'],
+  ['schedule', '🗓 Upload work schedule'],
+  ['shift', '⏱ Add a shift'],
+  ['bill', '📅 Pay a bill'],
+  ['invest', '📈 Investment contribution'],
+];
+async function runAdd(action) {
+  if (action === 'transaction') {
+    const { openTransactionForm } = await import('./views/transactions.js');
+    if (await openTransactionForm(ctx)) render();
+  } else if (action === 'receipt' || action === 'schedule') {
+    const input = $(action === 'receipt' ? '#globalReceipt' : '#globalSchedule');
+    input.value = '';
+    input.click();
+  } else if (action === 'shift') ctx.go('income', 'tab=shifts&add=1');
+  else if (action === 'bill') ctx.go('bills');
+  else if (action === 'invest') ctx.go('investments');
 }
 
 function initChrome() {
@@ -110,9 +130,20 @@ function initChrome() {
     const step = e.target.closest('[data-step]')?.dataset.step;
     if (step) setMonth(shiftMonth(ctx.month, Number(step)));
   });
-  $('#quickAdd').addEventListener('click', async () => {
-    const { openTransactionForm } = await import('./views/transactions.js');
-    if (await openTransactionForm(ctx)) render();
+  const menu = $('#addMenu');
+  menu.innerHTML = ADD_ACTIONS.map(([id, label]) => `<button data-add="${id}">${label}</button>`).join('');
+  $('#quickAdd').addEventListener('click', (e) => { e.stopPropagation(); menu.classList.toggle('hidden'); });
+  document.addEventListener('click', () => menu.classList.add('hidden'));
+  on(menu, 'click', '[data-add]', (e, b) => { menu.classList.add('hidden'); runAdd(b.dataset.add); });
+  $('#globalReceipt').addEventListener('change', async (e) => {
+    if (!e.target.files.length) return;
+    const { startReceipt } = await import('./views/receipts.js');
+    startReceipt([...e.target.files], ctx);
+  });
+  $('#globalSchedule').addEventListener('change', async (e) => {
+    if (!e.target.files.length) return;
+    const { startSchedule } = await import('./views/income.js');
+    startSchedule([...e.target.files], ctx);
   });
   $('#themeBtn').addEventListener('click', () => {
     const root = document.documentElement;

@@ -2,7 +2,7 @@
 // data/db.json with an atomic write (tmp file + rename) after every change.
 import fs from 'node:fs';
 import path from 'node:path';
-import { createSeed } from './seed.js';
+import { createSeed, migrate } from './seed.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || 'data');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
@@ -12,7 +12,7 @@ const DB_FILE = path.join(DATA_DIR, 'db.json');
 export const KEYS = [
   'settings', 'categories', 'incomeSources', 'budgets', 'transactions', 'receipts',
   'rules', 'jobs', 'shifts', 'paystubs', 'bills', 'sinkingFunds', 'debts',
-  'debtStrategy', 'netWorth', 'goals', 'reviews',
+  'debtStrategy', 'netWorth', 'goals', 'reviews', 'investing',
 ];
 
 let data = null;
@@ -26,7 +26,8 @@ export function load() {
   ensureDirs();
   if (fs.existsSync(DB_FILE)) {
     data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    // Fill keys added in later versions without touching existing data.
+    // Upgrade older data first (it moves values between keys), then fill keys added later.
+    migrate(data);
     const seed = createSeed();
     for (const key of KEYS) if (data[key] === undefined) data[key] = seed[key];
     data.settings = { ...seed.settings, ...data.settings, tax: { ...seed.settings.tax, ...data.settings?.tax } };
@@ -61,6 +62,7 @@ export function replaceAll(next) {
   if (!next || typeof next !== 'object' || !next.settings || !Array.isArray(next.categories)) {
     throw Object.assign(new Error('Not a valid backup file'), { status: 400 });
   }
+  migrate(next);
   const seed = createSeed();
   data = { version: seed.version };
   for (const key of KEYS) data[key] = next[key] ?? seed[key];

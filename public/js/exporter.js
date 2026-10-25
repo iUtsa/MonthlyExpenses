@@ -4,6 +4,7 @@ import { state, update, categoryName } from './store.js';
 import { loadScript, today, monthLabel, round2, uid, toast, sum } from './util.js';
 import {
   monthSummary, netWorth, emergencyFund, highInterestDebt, simulateDebts, projectSaving, computeShifts, monthlyEquivalent, incomeBracket,
+  goalProgress, goalCurrent, investmentSummary, retirementPlan, ytdContributions,
 } from './calc.js';
 
 async function xlsx() {
@@ -101,8 +102,19 @@ export async function exportWorkbook(month) {
 
   X.utils.book_append_sheet(wb, sheet(X, [
     ['Goal', 'Target $', 'Current', 'Monthly $', 'Target Date', 'Progress %', 'Projected Date', 'Required Monthly', 'Status / Next Action'],
-    ...state.goals.map((g) => { const p = projectSaving(g); return [g.name, g.target, g.current, g.monthly, g.targetDate || '', round2(p.progress * 100) / 100, p.projectedDate || '', round2(p.requiredMonthly), g.notes || p.status]; }),
+    ...state.goals.map((g) => { const p = goalProgress(state, g); return [g.name, g.target, round2(goalCurrent(state, g)), g.monthly, g.targetDate || '', round2(p.progress * 100) / 100, p.projectedDate || '', round2(p.requiredMonthly), g.notes || p.status]; }),
   ], [36, 10, 10, 10, 12, 11, 14, 16, 30]), 'Goals');
+
+  const inv = investmentSummary(state);
+  const plan = retirementPlan(state);
+  const year = Number(today().slice(0, 4));
+  X.utils.book_append_sheet(wb, sheet(X, [
+    ['Account', 'Type', 'Balance', 'You / month', 'Employer match / month', `${year} contributions`, 'US stocks %', 'Intl stocks %', 'Bonds %', 'Cash %', 'Other %'],
+    ...inv.accounts.map((a) => [a.name, a.typeInfo.name, a.balance, a.monthly, round2(a.match.monthly), ytdContributions(state, a.id, year), ...['us_stock', 'intl_stock', 'bonds', 'cash', 'other'].map((k) => round2((a.allocation?.[k] || 0) * 100))]),
+    ['TOTAL', '', inv.total, inv.monthlyYou, round2(inv.monthlyMatch)],
+    [],
+    ['Financial independence number', round2(plan.fiNumber)], ['Projected at retirement (today\'s $)', round2(plan.atRetirement)], ['Monthly needed to reach FI by retirement', round2(plan.neededMonthly)],
+  ], [28, 20, 12, 12, 20, 18, 11, 12, 9, 8, 9]), 'Investments');
 
   const shifts = computeShifts(state);
   if (shifts.length) {

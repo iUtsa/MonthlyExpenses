@@ -2,6 +2,8 @@
 // receipts -> categorized line items, work schedules -> shifts, pay stubs -> earnings/tax breakdown.
 // Every call returns JSON constrained by a schema (structured outputs).
 
+import { resolveShiftTimes, personMatches, parseAnyDate } from './parse.js';
+
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_EFFORT = 'medium';
 
@@ -99,7 +101,8 @@ export function parseJsonReply(text) {
   }
 }
 
-export async function extractNvidia({ apiKey, models = NVIDIA_MODELS, system, content, schema }) {
+// thinking: true/false toggles reasoning on models that support it (Nemotron); undefined = model default.
+export async function extractNvidia({ apiKey, models = NVIDIA_MODELS, system, content, schema, temperature = 0.1, thinking, timeoutMs = 240000 }) {
   const images = content.filter((b) => b.type !== 'text');
   if (images.some((b) => b.type !== 'image')) throw new AIError('NVIDIA models read images only — PDFs are converted to images before upload.', 415);
   if (images.length > 1) throw new AIError('NVIDIA vision models take one image per request — pages are stitched before upload.', 415);
@@ -116,28 +119,39 @@ export async function extractNvidia({ apiKey, models = NVIDIA_MODELS, system, co
   ];
 
   let lastError = null;
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   for (const model of models) {
-    let res;
-    try {
-      res = await fetch(NVIDIA_URL, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ model, messages, max_tokens: 8192, temperature: 0.1 }),
-        signal: AbortSignal.timeout(240000),
-      });
-    } catch (err) {
-      lastError = new AIError(err.name === 'TimeoutError' ? 'The NVIDIA model took too long to answer.' : 'Could not reach the NVIDIA API. Check your connection.', 503);
-      continue;
+    // NVIDIA's hosted models often fail with a momentary 500/503 or 429 — retry those.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt) await wait([0, 1500, 4000, 8000][attempt]);
+      let res;
+      try {
+        res = await fetch(NVIDIA_URL, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ model, messages, max_tokens: 16384, temperature, ...(thinking === undefined ? {} : { chat_template_kwargs: { enable_thinking: thinking } }) }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (err) {
+        lastError = new AIError(err.name === 'TimeoutError' ? 'The NVIDIA model took too long to answer.' : 'Could not reach the NVIDIA API. Check your connection.', 503);
+        if (err.name === 'TimeoutError') break; // a slow model won't get faster — move on
+        continue;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) throw new AIError('NVIDIA API key was rejected. Check NVIDIA_API_KEY.', 401);
+      if (!res.ok) {
+        lastError = new AIError(`NVIDIA API error ${res.status} (${model}): ${data.detail || data.message || data.error?.message || 'request failed'}`, res.status === 429 ? 429 : 502);
+        if (res.status === 429 || res.status >= 500) continue;
+        break;
+      }
+      const choice = data.choices?.[0];
+      if (choice?.finish_reason === 'length') { lastError = new AIError('The document was too long to finish parsing. Try a closer photo.', 422); break; }
+      try {
+        return conform(schema, parseJsonReply(choice?.message?.content));
+      } catch (err) {
+        lastError = err; // malformed reply: ask again
+      }
     }
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 401 || res.status === 403) throw new AIError('NVIDIA API key was rejected. Check NVIDIA_API_KEY.', 401);
-    if (!res.ok) {
-      lastError = new AIError(`NVIDIA API error ${res.status} (${model}): ${data.detail || data.message || data.error?.message || 'request failed'}`, res.status === 429 ? 429 : 502);
-      continue; // busy or failing model: try the next one
-    }
-    const choice = data.choices?.[0];
-    if (choice?.finish_reason === 'length') throw new AIError('The document was too long to finish parsing. Try a closer photo.', 422);
-    return conform(schema, parseJsonReply(choice?.message?.content));
   }
   throw lastError || new AIError('No NVIDIA model was available.', 502);
 }
@@ -200,39 +214,110 @@ Guidance:
   };
 }
 
-export function scheduleRequest({ blocks, person, today }) {
+// Schedules are transcribed in full — every person, every shift — and the user's own shifts
+// are picked out afterwards in code (exact name matching beats asking a model to filter).
+export function scheduleRequest({ blocks, today, ocrText = '' }) {
   const schema = obj({
     employer: str,
-    person_name: str,
     period_start: { ...str, description: 'YYYY-MM-DD or empty' },
     period_end: { ...str, description: 'YYYY-MM-DD or empty' },
     hourly_rate: { ...num, description: '0 if no pay rate is shown' },
+    people: { type: 'array', items: str, description: 'Every person/row name on the schedule, exactly as printed' },
     shifts: {
       type: 'array',
       items: obj({
+        person: { ...str, description: 'Name exactly as printed for this row/entry; empty if the schedule belongs to one person and shows no names' },
         date: { ...str, description: 'YYYY-MM-DD' },
+        time_text: { ...str, description: 'The time range exactly as printed in the cell, e.g. "9a-5p", "1-5", "4:00 PM – 10:00 PM"' },
         start: { ...str, description: '24-hour HH:MM' },
-        end: { ...str, description: '24-hour HH:MM; may be earlier than start for overnight shifts' },
+        end: { ...str, description: '24-hour HH:MM (earlier than start for overnight shifts)' },
         break_minutes: num,
         role: str,
-        location: str,
-        notes: str,
       }),
     },
     notes: str,
   });
   return {
-    system: 'You read work schedules (rosters, scheduling-app screenshots, calendars, PDFs) and list the work shifts they contain. Only report shifts that are actually shown.',
+    system: 'You transcribe work schedules (rosters, scheduling-app screenshots, printed or photographed sheets) into data. You are exhaustive and exact: every shift for every person, nothing invented.',
     content: [
       ...blocks,
       {
         type: 'text',
-        text: `List every work shift in this schedule. Today is ${today}; when the year is not printed, pick the year that puts the dates closest to today.
-${person ? `If the schedule shows several people, only include shifts for "${person}" (match first names or initials loosely).` : 'If the schedule shows several people, include only the shifts that appear to belong to the schedule owner and explain your choice in notes.'}
-Convert times to 24-hour HH:MM. Skip days off, PTO, or "available" blocks unless they are paid shifts. Use 0 for unpaid break minutes that are not shown.`,
+        text: `Transcribe this work schedule completely. Today is ${today}; when the year is not printed, use the year that puts the dates closest to today.
+
+How to read it:
+- Include EVERY shift for EVERY person — do not filter to any one person.
+- Grid layouts (people as rows, days as columns): go row by row. For each person, read every day column from left to right and take each cell's date from the column header directly above it. If the photo is tilted, follow the table lines, not straight horizontal lines.
+- Day-column layouts (names listed under each day): each line under a day is one shift for that named person on that day.
+- Personal schedules ("My shifts" lists) with no names: leave person empty.
+- A cell with two time ranges (split shift) is two separate shifts.
+- Skip OFF, blank, PTO, "closed", "available", or unscheduled days.
+- time_text must be copied exactly as printed. Also give your 24-hour start/end reading of it.
+- break_minutes only when a break is printed; otherwise 0.${ocrText ? `
+
+Machine OCR of the same image (may contain misreads; use it to double-check small or blurry text, but trust the image for layout):
+"""
+${ocrText.slice(0, 6000)}
+"""` : ''}`,
       },
     ],
     schema,
+  };
+}
+
+const normName = (s) => String(s || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z]+/g, ' ').trim();
+
+// Combine several independent readings of the same schedule. Times are re-derived from the
+// printed text so every reader uses the same am/pm rules; a shift's `votes` says how many
+// readers saw it (shown to the user as "confirmed" vs "check this").
+export function mergeScheduleReads(reads) {
+  const merged = [];
+  const people = new Map();
+  const tokens = (n) => normName(n).split(' ').filter(Boolean);
+  // Same person if either reading's name contains the other's tokens ("A. Das (Arnab)" ~ "Arnab Das").
+  const samePerson = (a, b) => {
+    if (!a || !b) return !a && !b;
+    const ta = tokens(a); const tb = tokens(b);
+    return ta[0] === tb[0] || personMatches(a, [b.replace(/\([^)]*\)/g, '')]) || personMatches(b, [a.replace(/\([^)]*\)/g, '')])
+      || ta.some((t) => t.length > 2 && tb.includes(t));
+  };
+  for (const read of reads) {
+    for (const p of read.people || []) if (p && !people.has(normName(p))) people.set(normName(p), p);
+    const used = new Set();
+    for (const s of read.shifts || []) {
+      const t = resolveShiftTimes(s.time_text) || (s.start && s.end ? { start: s.start.slice(0, 5), end: s.end.slice(0, 5) } : null);
+      const date = parseAnyDate(s.date);
+      if (!date || !t) continue;
+      if (s.person && !people.has(normName(s.person))) people.set(normName(s.person), s.person);
+      const prev = merged.find((m) => m.date === date && m.start === t.start && m.end === t.end && samePerson(m.person, s.person || ''));
+      if (prev && used.has(prev)) continue; // same reader listed it twice
+      if (prev) {
+        prev.votes++; used.add(prev);
+        prev.break_minutes ||= s.break_minutes; prev.role ||= s.role;
+        if (s.person && s.person.length > prev.person.length) prev.person = s.person;
+      } else {
+        const row = { person: s.person || '', date, start: t.start, end: t.end, time_text: s.time_text, break_minutes: s.break_minutes || 0, role: s.role || '', votes: 1 };
+        merged.push(row); used.add(row);
+      }
+    }
+  }
+  // A shift only one reading saw, with the same hours as a better-supported shift for the same
+  // person one day away, is almost always a column slip on a grid: flag it so it starts unchecked.
+  const dayMs = 86400000;
+  for (const x of merged) {
+    x.suspect = reads.length >= 3 && x.votes === 1 && merged.some((o) => o !== x && o.votes > x.votes && o.start === x.start && o.end === x.end
+      && samePerson(o.person, x.person) && Math.abs(new Date(o.date) - new Date(x.date)) === dayMs);
+  }
+  const first = (k) => reads.map((r) => r[k]).find(Boolean) || '';
+  return {
+    employer: first('employer'),
+    period_start: first('period_start'),
+    period_end: first('period_end'),
+    hourly_rate: reads.map((r) => r.hourly_rate).find((x) => x > 0) || 0,
+    people: [...people.values()],
+    readers: reads.length,
+    shifts: merged.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)),
+    notes: reads.map((r) => r.notes).filter(Boolean).join(' '),
   };
 }
 

@@ -13,18 +13,18 @@ export async function render(el, ctx) {
     <div class="grid cols-4">
       <div class="card tile"><span class="tile-label">Net worth</span><span class="tile-value ${nw.net < 0 ? 'neg' : ''}">${money(nw.net, { cents: false })}</span>
         <span class="tile-sub">${prev ? `${nw.net >= prev.net ? '▲' : '▼'} ${money(nw.net - prev.net, { cents: false, sign: true })} since ${monthLabel(prev.month, 'short')}` : 'Take a snapshot each month to see your trend'}</span></div>
-      <div class="card tile"><span class="tile-label">Total assets</span><span class="tile-value">${money(nw.assets, { cents: false })}</span><span class="tile-sub">${money(nw.liquid, { cents: false })} liquid</span></div>
+      <div class="card tile"><span class="tile-label">Total assets</span><span class="tile-value">${money(nw.assets, { cents: false })}</span><span class="tile-sub">${money(nw.liquid, { cents: false })} liquid · ${money(nw.investments, { cents: false })} invested</span></div>
       <div class="card tile"><span class="tile-label">Total liabilities</span><span class="tile-value">${money(nw.liabilities, { cents: false })}</span><span class="tile-sub">${money(nw.debtTotal, { cents: false })} from Debt payoff</span></div>
       <div class="card tile"><span class="tile-label">Emergency fund coverage</span><span class="tile-value">${ef.months.toFixed(1)} mo</span><span class="tile-sub">Liquid assets ÷ ${money(state.settings.monthlyEssentials, { cents: false })} essentials</span></div>
     </div>
     <div class="card" style="margin-top:16px">
-      <div class="card-head"><div><h2>Net worth over time</h2><p>Direction matters more than precision. Snapshot once a month.</p></div>
+      <div class="card-head"><div><h2>Net worth over time</h2><p>This month's snapshot updates itself as balances change.</p></div>
         <button class="btn primary" data-action="snapshot">Save ${monthLabel(ctx.month, 'short')} snapshot</button></div>
       ${history.length >= 2 ? '<div class="chart-box"><canvas id="nwChart" aria-label="Net worth trend"></canvas></div>' : emptyState('📈', history.length ? 'One snapshot saved' : 'No snapshots yet', 'Save a snapshot each month and your trend line appears here.')}
     </div>
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card flush">
-        <div class="card-head"><div><h2>Assets</h2><p>Tick “liquid” for cash you could use in an emergency.</p></div><button class="btn small" data-action="add-asset">+ Asset</button></div>
+        <div class="card-head"><div><h2>Assets</h2><p>Tick “liquid” for cash you could use in an emergency. Investment accounts come from Investments.</p></div><button class="btn small" data-action="add-asset">+ Asset</button></div>
         <div class="table-wrap"><table>
           <thead><tr><th>Asset</th><th class="num">Value</th><th>Liquid</th><th></th></tr></thead>
           <tbody>${state.netWorth.assets.map((a) => `<tr>
@@ -32,6 +32,7 @@ export async function render(el, ctx) {
             <td style="width:140px"><input class="cell num" type="number" step="0.01" data-asset="${a.id}" data-field="value" data-key="a-${a.id}" value="${a.value}"></td>
             <td><input type="checkbox" data-asset="${a.id}" data-field="liquid" ${a.liquid ? 'checked' : ''} aria-label="Liquid"></td>
             <td class="actions"><button class="icon-btn small" data-del-asset="${a.id}" aria-label="Delete">🗑</button></td></tr>`).join('')}</tbody>
+            ${(state.investing?.accounts || []).map((a) => `<tr><td>${esc(a.name)} <a href="#/investments" class="small">edit</a></td><td class="num">${money(a.balance)}</td><td></td><td></td></tr>`).join('')}
           <tfoot><tr><td>Total assets</td><td class="num">${money(nw.assets)}</td><td colspan="2"></td></tr></tfoot>
         </table></div>
       </div>

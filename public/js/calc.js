@@ -41,8 +41,37 @@ export function budgetFor(s, month) {
   return s.budgets[month] || { income: {}, planned: {}, notes: {} };
 }
 
+// Budget lines other pages already know about. A value typed into the budget overrides these;
+// clearing it returns the line to its linked value.
+export function linkedPlan(s, month) {
+  const income = {};
+  const planned = {};
+  const e = earningsForMonth(s, month);
+  for (const j of e.byJob) {
+    if (!j.job.sourceId || !j.paidNet) continue;
+    income[j.job.sourceId] ??= { value: 0, from: 'Expected take-home from your shifts' };
+    income[j.job.sourceId].value += j.paidNet;
+  }
+  const set = (id, value, from) => { if (value > 0) planned[id] = { value: round2(value), from }; };
+  set('sinking_funds', sum(s.sinkingFunds, (f) => f.monthly), 'Total of your sinking-fund contributions');
+  set('min_debt', sum(s.debts.filter((d) => d.balance > 0), (d) => d.minPayment), 'Minimum payments from Debt payoff');
+  if (s.debts.some((d) => d.balance > 0)) set('extra_debt', s.debtStrategy?.extraMonthly || 0, 'Extra payment from your payoff strategy');
+  const inv = investmentSummary(s);
+  set('retirement', inv.byBucket.retirement, 'Monthly contributions to retirement accounts');
+  set('investing', inv.byBucket.investing, 'Monthly contributions to investment accounts');
+  const byCat = {};
+  for (const bill of s.bills || []) if (bill.categoryId) byCat[bill.categoryId] = (byCat[bill.categoryId] || 0) + monthlyEquivalent(bill);
+  for (const [id, v] of Object.entries(byCat)) if (!planned[id]) set(id, v, 'Your recurring bills in this category');
+  for (const v of Object.values(income)) v.value = round2(v.value);
+  return { income, planned };
+}
+
 export function monthSummary(s, month) {
   const b = budgetFor(s, month);
+  const linked = linkedPlan(s, month);
+  const pick = (manual, link) => (manual !== undefined && manual !== null && manual !== ''
+    ? { planned: Number(manual) || 0, auto: null, link: link || null }
+    : { planned: link?.value || 0, auto: link || null, link: link || null });
   const tx = monthTx(s, month);
   const expenses = tx.filter((t) => t.type === 'expense');
   const incomes = tx.filter((t) => t.type === 'income');
@@ -51,13 +80,13 @@ export function monthSummary(s, month) {
 
   const income = s.incomeSources.map((src) => ({
     ...src,
-    planned: Number(b.income[src.id]) || 0,
+    ...pick(b.income[src.id], linked.income[src.id]),
     actual: sum(incomes.filter((t) => (sourceIds.has(t.sourceId) ? t.sourceId : 'other') === src.id), (t) => t.amount),
   }));
 
   const rows = s.categories.map((c) => {
     const items = expenses.filter((t) => t.categoryId === c.id);
-    return { ...c, planned: Number(b.planned[c.id]) || 0, actual: sum(items, (t) => t.amount), count: items.length };
+    return { ...c, ...pick(b.planned[c.id], linked.planned[c.id]), actual: sum(items, (t) => t.amount), count: items.length };
   });
   const uncategorized = expenses.filter((t) => !catIds.has(t.categoryId));
 
@@ -114,11 +143,12 @@ export function suggestPlan(s, plannedIncome) {
    Net worth & emergency fund
    ====================================================================== */
 export function netWorth(s) {
-  const assets = sum(s.netWorth.assets, (a) => a.value);
+  const investments = sum(s.investing?.accounts || [], (a) => a.balance);
+  const assets = sum(s.netWorth.assets, (a) => a.value) + investments;
   const debtTotal = sum(s.debts, (d) => d.balance);
   const other = sum(s.netWorth.otherLiabilities, (l) => l.value);
   const liquid = sum(s.netWorth.assets.filter((a) => a.liquid), (a) => a.value);
-  return { assets, liabilities: debtTotal + other, debtTotal, otherLiabilities: other, net: assets - debtTotal - other, liquid };
+  return { assets, investments, liabilities: debtTotal + other, debtTotal, otherLiabilities: other, net: assets - debtTotal - other, liquid };
 }
 
 export function emergencyFund(s) {
@@ -558,6 +588,7 @@ export function healthScore(s, month) {
 export function roadmap(s, month) {
   const m = monthSummary(s, month);
   const ef = emergencyFund(s);
+  const inv = investmentSummary(s);
   const savingsAsset = sum(s.netWorth.assets.filter((a) => a.liquid && a.id !== 'checking'), (a) => a.value);
   const hi = highInterestDebt(s);
   const retirement = sum(m.rows.filter((r) => r.id === 'retirement' || r.id === 'investing'), (r) => r.planned);
@@ -565,11 +596,11 @@ export function roadmap(s, month) {
   const steps = [
     { title: 'Give every dollar a job', detail: 'Plan income and expenses until Remaining to Assign is $0.', done: m.plannedIncome > 0 && Math.abs(m.remainingToAssign) < 1 },
     { title: 'Starter emergency fund of $1,000', detail: 'A small cash cushion stops surprises from becoming debt.', done: savingsAsset >= 1000 },
-    { title: 'Capture the full employer 401(k) match', detail: 'An instant 50–100% return. Tick this in Settings once you do.', done: Boolean(s.settings.employerMatch) },
+    { title: 'Capture the full employer 401(k) match', detail: 'An instant 50–100% return. Set the match on your 401(k) in Investments.', done: Boolean(s.settings.employerMatch) || (inv.accounts.some((a) => a.match.needed > 0) && inv.missedMatch < 1) },
     { title: 'Pay off high-interest debt', detail: `All debts at ${(s.settings.highInterestApr * 100).toFixed(0)}%+ APR.`, done: hi <= 0 },
     { title: `Full emergency fund (${s.settings.efTargetMonths} months)`, detail: 'Of essential expenses, in liquid savings.', done: ef.months >= s.settings.efTargetMonths },
     { title: 'Fund sinking funds for known costs', detail: 'Every irregular expense has a monthly contribution.', done: funds.length > 0 && funds.every((f) => f.balance >= f.target || f.monthly > 0) },
-    { title: 'Invest 15%+ for retirement', detail: 'Retirement + investing lines ≥ 15% of planned income.', done: m.plannedIncome > 0 && retirement / m.plannedIncome >= 0.15 },
+    { title: 'Invest 15%+ for retirement', detail: 'Retirement + investing lines (plus employer match) ≥ 15% of planned income.', done: m.plannedIncome > 0 && (retirement + inv.monthlyMatch) / m.plannedIncome >= 0.15 },
     { title: 'Pay off remaining debt & build wealth', detail: 'Low-interest loans, mortgage, then taxable investing.', done: s.debts.every((d) => d.balance <= 0) },
   ];
   const current = steps.findIndex((x) => !x.done);
@@ -618,3 +649,134 @@ export function autoCategorize(s, text) {
 }
 
 export { isoDate };
+
+/* ======================================================================
+   Investments
+   ====================================================================== */
+export const INVESTMENT_TYPES = [
+  { id: '401k', name: '401(k) / 403(b)', limit: 'k401', bucket: 'retirement', match: true },
+  { id: 'roth_401k', name: 'Roth 401(k)', limit: 'k401', bucket: 'retirement', match: true },
+  { id: 'trad_ira', name: 'Traditional IRA', limit: 'ira', bucket: 'retirement' },
+  { id: 'roth_ira', name: 'Roth IRA', limit: 'ira', bucket: 'retirement' },
+  { id: 'hsa', name: 'HSA (invested)', limit: 'hsa', bucket: 'retirement' },
+  { id: 'brokerage', name: 'Brokerage (taxable)', bucket: 'investing' },
+  { id: 'crypto', name: 'Crypto', bucket: 'investing' },
+  { id: '529', name: '529 education', bucket: 'investing' },
+  { id: 'other', name: 'Other investment', bucket: 'investing' },
+];
+export const ASSET_CLASSES = [
+  { id: 'us_stock', name: 'US stocks' }, { id: 'intl_stock', name: 'International stocks' },
+  { id: 'bonds', name: 'Bonds' }, { id: 'cash', name: 'Cash / money market' }, { id: 'other', name: 'Crypto / other' },
+];
+// 2026 IRS limits (employee contributions)
+export const CONTRIBUTION_LIMITS = {
+  2026: { k401: 24500, k401CatchUp: 8000, ira: 7500, iraCatchUp: 1100, hsaSelf: 4400, hsaFamily: 8750, hsaCatchUp: 1000 },
+};
+export const investmentType = (id) => INVESTMENT_TYPES.find((t) => t.id === id) || INVESTMENT_TYPES.at(-1);
+
+export function contributionLimit(type, settings, year = 2026) {
+  const L = CONTRIBUTION_LIMITS[year] || CONTRIBUTION_LIMITS[2026];
+  const t = investmentType(type);
+  if (t.limit === 'k401') return L.k401 + (settings.age50Plus ? L.k401CatchUp : 0);
+  if (t.limit === 'ira') return L.ira + (settings.age50Plus ? L.iraCatchUp : 0);
+  if (t.limit === 'hsa') return (settings.hsaCoverage === 'family' ? L.hsaFamily : L.hsaSelf) + (settings.age50Plus ? L.hsaCatchUp : 0);
+  return null;
+}
+
+// Employer match: `employerMatchRate` (e.g. 0.5 = 50¢ per $1) on contributions up to
+// `employerMatchUpTo` of salary (e.g. 0.06). Returns monthly figures.
+export function employerMatch(account, annualSalary) {
+  if (!investmentType(account.type).match || !account.employerMatchRate || !account.employerMatchUpTo) return { monthly: 0, missed: 0, needed: 0 };
+  const cap = (annualSalary * account.employerMatchUpTo) / 12;
+  const contrib = Number(account.monthly) || 0;
+  return {
+    monthly: Math.min(contrib, cap) * account.employerMatchRate,
+    missed: Math.max(0, cap - contrib) * account.employerMatchRate,
+    needed: cap,
+  };
+}
+
+// Contributions logged this calendar year (transactions tagged with the account).
+export const ytdContributions = (s, accountId, year) => sum(
+  s.transactions.filter((t) => t.investmentAccountId === accountId && t.date?.startsWith(String(year)) && t.type === 'expense'), (t) => t.amount,
+);
+
+export function investmentSummary(s) {
+  const accounts = s.investing?.accounts || [];
+  const salary = s.settings.annualGross || 0;
+  const total = sum(accounts, (a) => a.balance);
+  const rows = accounts.map((a) => ({ ...a, typeInfo: investmentType(a.type), match: employerMatch(a, salary) }));
+  const monthlyYou = sum(accounts, (a) => a.monthly);
+  const monthlyMatch = sum(rows, (r) => r.match.monthly);
+  const missedMatch = sum(rows, (r) => r.match.missed);
+  const allocation = ASSET_CLASSES.map((c) => ({ ...c, value: sum(accounts, (a) => (a.balance || 0) * (a.allocation?.[c.id] || 0)) }));
+  const byBucket = {
+    retirement: sum(accounts.filter((a) => investmentType(a.type).bucket === 'retirement'), (a) => a.monthly),
+    investing: sum(accounts.filter((a) => investmentType(a.type).bucket === 'investing'), (a) => a.monthly),
+  };
+  return { accounts: rows, total, monthlyYou, monthlyMatch, missedMatch, allocation, byBucket };
+}
+
+// Future value in today's dollars (real return), compounded monthly. Returns yearly points.
+export function projectGrowth({ start, monthly, annualReturn, inflation = 0, years }) {
+  const r = (1 + annualReturn) / (1 + inflation) - 1;
+  const m = (1 + r) ** (1 / 12) - 1;
+  const points = [start];
+  let bal = start;
+  for (let y = 1; y <= years; y++) {
+    for (let k = 0; k < 12; k++) bal = bal * (1 + m) + monthly;
+    points.push(bal);
+  }
+  return points;
+}
+
+export function retirementPlan(s) {
+  const inv = investmentSummary(s);
+  const st = s.investing?.settings || {};
+  const years = Math.max(0, (st.retireAge || 65) - (st.currentAge || 25));
+  const spending = st.retirementSpending || (s.settings.monthlyEssentials || 0) * 12 * 1.25;
+  const fiNumber = spending / (st.withdrawalRate || 0.04);
+  const monthly = inv.monthlyYou + inv.monthlyMatch;
+  const scenarios = [0.05, st.expectedReturn || 0.07, 0.09].map((ret) => ({
+    ret, points: projectGrowth({ start: inv.total, monthly, annualReturn: ret, inflation: st.inflation ?? 0.03, years }),
+  }));
+  const base = scenarios[1].points;
+  const yearsToFI = base.findIndex((v) => v >= fiNumber);
+  // Monthly amount that reaches the FI number by retirement age at the expected return.
+  const r = (1 + (st.expectedReturn || 0.07)) / (1 + (st.inflation ?? 0.03)) - 1;
+  const m = (1 + r) ** (1 / 12) - 1;
+  const n = years * 12;
+  const fvStart = inv.total * (1 + m) ** n;
+  const neededMonthly = n ? Math.max(0, ((fiNumber - fvStart) * m) / ((1 + m) ** n - 1)) : 0;
+  return { inv, years, spending, fiNumber, monthly, scenarios, atRetirement: base.at(-1), yearsToFI: yearsToFI < 0 ? null : yearsToFI, neededMonthly, progress: fiNumber ? inv.total / fiNumber : 0 };
+}
+
+/* ======================================================================
+   Goals linked to accounts
+   ====================================================================== */
+// Goal links: 'asset:<id>' (Net worth row), 'sinking:<id>', 'invest:<id>', 'debts:<kind>' or 'debt:<id>'.
+export function goalLinkOptions(s) {
+  const kinds = [...new Set(s.debts.map((d) => d.kind))];
+  return [
+    { id: '', name: 'Track manually' },
+    ...s.netWorth.assets.filter((a) => a.liquid).map((a) => ({ id: `asset:${a.id}`, name: `Balance: ${a.name}` })),
+    ...s.sinkingFunds.map((f) => ({ id: `sinking:${f.id}`, name: `Sinking fund: ${f.name}` })),
+    ...(s.investing?.accounts || []).map((a) => ({ id: `invest:${a.id}`, name: `Investment: ${a.name}` })),
+    ...kinds.map((k) => ({ id: `debts:${k}`, name: `Pay off all ${k.replace(/_/g, ' ')}s` })),
+    ...s.debts.map((d) => ({ id: `debt:${d.id}`, name: `Pay off ${d.name}` })),
+  ];
+}
+
+export function goalCurrent(s, g) {
+  const [kind, ref] = String(g.link || '').split(':');
+  if (kind === 'asset') return s.netWorth.assets.find((a) => a.id === ref)?.value ?? g.current;
+  if (kind === 'sinking') return s.sinkingFunds.find((f) => f.id === ref)?.balance ?? g.current;
+  if (kind === 'invest') return s.investing?.accounts.find((a) => a.id === ref)?.balance ?? g.current;
+  if (kind === 'debts' || kind === 'debt') {
+    const owed = sum(s.debts.filter((d) => (kind === 'debt' ? d.id === ref : d.kind === ref)), (d) => d.balance);
+    return Math.max(0, (g.startBalance ?? g.target) - owed);
+  }
+  return g.current;
+}
+
+export const goalProgress = (s, g) => projectSaving({ ...g, current: goalCurrent(s, g) });

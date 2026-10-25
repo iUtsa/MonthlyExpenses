@@ -1,12 +1,14 @@
 import { state, update } from '../store.js';
-import { esc, money, fmtDate, uid, modal, confirmDialog, toast, on, sum, round2, today } from '../util.js';
-import { projectSaving, roadmap } from '../calc.js';
+import { esc, money, fmtDate, uid, modal, confirmDialog, toast, on, sum, round2, today, options } from '../util.js';
+import { goalProgress, goalCurrent, goalLinkOptions, roadmap } from '../calc.js';
 
 const STATUS = { 'On track': 'good', Behind: 'bad', Funded: 'good', 'No date': '', 'Not funded': 'warn' };
 
 export async function render(el, ctx) {
   const rm = roadmap(state, ctx.month);
-  const goals = state.goals.map((g) => ({ g, p: projectSaving(g) }));
+  const goals = state.goals.map((g) => ({ g, p: goalProgress(state, g), current: goalCurrent(state, g) }));
+  const linkOpts = goalLinkOptions(state);
+  const LINK_PAGE = { asset: ['networth', 'Net worth'], sinking: ['sinking', 'Sinking funds'], invest: ['investments', 'Investments'], debts: ['debts', 'Debt payoff'], debt: ['debts', 'Debt payoff'] };
 
   el.innerHTML = `
     <div class="grid cols-3">
@@ -19,13 +21,14 @@ export async function render(el, ctx) {
       </div>
       <div class="stack span-2">
         <div class="row between"><h2>Goals</h2><button class="btn primary" data-action="add">+ Add goal</button></div>
-        <div class="grid cols-2">${goals.map(({ g, p }) => `<div class="card">
+        <div class="grid cols-2">${goals.map(({ g, p, current }) => { const lk = LINK_PAGE[String(g.link || '').split(':')[0]]; return `<div class="card">
           <div class="card-head" style="margin-bottom:8px"><input class="cell" data-id="${g.id}" data-field="name" value="${esc(g.name)}" style="font-weight:600;font-size:15px"><span class="badge ${STATUS[p.status]}">${esc(p.status)}</span></div>
-          <div class="row between"><span class="tile-value" style="font-size:20px">${money(g.current, { cents: false })}</span><span class="muted">of ${money(g.target, { cents: false })}</span></div>
+          <label class="field" style="margin-bottom:8px">Progress comes from<select data-link="${g.id}">${options(linkOpts, g.link || '')}</select></label>
+          <div class="row between"><span class="tile-value" style="font-size:20px">${money(current, { cents: false })}</span><span class="muted">of ${money(g.target, { cents: false })}</span></div>
           <div class="meter ${p.status === 'Behind' ? 'warn' : p.remaining === 0 ? 'good' : ''}" style="margin:8px 0"><span style="width:${Math.round(p.progress * 100)}%"></span></div>
           <div class="form-grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
             <label class="field">Target $<input type="number" data-id="${g.id}" data-field="target" value="${g.target}"></label>
-            <label class="field">Saved so far<input type="number" data-id="${g.id}" data-field="current" value="${g.current}"></label>
+            <label class="field">${lk ? 'Progress (linked)' : 'Saved so far'}<input type="number" data-id="${g.id}" data-field="current" value="${round2(current)}" ${lk ? 'disabled' : ''}></label>
             <label class="field">Monthly $<input type="number" data-id="${g.id}" data-field="monthly" value="${g.monthly}"></label>
             <label class="field">Target date<input type="date" data-id="${g.id}" data-field="targetDate" value="${esc(g.targetDate || '')}"></label>
           </div>
@@ -34,10 +37,10 @@ export async function render(el, ctx) {
             ${g.targetDate && p.status === 'Behind' ? `<br>To hit ${fmtDate(g.targetDate, { month: 'short', year: 'numeric' })} you need <strong>${money(p.requiredMonthly, { cents: false })}/mo</strong>. <button class="btn small" data-fix="${g.id}" data-amount="${Math.ceil(p.requiredMonthly)}">Use this</button>` : ''}`}
           </div>
           <input class="cell small" data-id="${g.id}" data-field="notes" value="${esc(g.notes || '')}" placeholder="Next action…" style="margin-top:8px">
-          <div class="row" style="margin-top:10px"><button class="btn small" data-contrib="${g.id}">+ Contribution</button><span class="spacer"></span><button class="icon-btn small" data-del="${g.id}" aria-label="Delete">🗑</button></div>
-        </div>`).join('')}</div>
+          <div class="row" style="margin-top:10px">${lk ? `<a class="btn small" href="#/${lk[0]}">Update in ${lk[1]} →</a>` : `<button class="btn small" data-contrib="${g.id}">+ Contribution</button>`}<span class="spacer"></span><button class="icon-btn small" data-del="${g.id}" aria-label="Delete">🗑</button></div>
+        </div>`; }).join('')}</div>
         <div class="card"><div class="kv">
-          <span>Total saved toward goals</span><span>${money(sum(state.goals, (g) => g.current))}</span>
+          <span>Total progress toward goals</span><span>${money(sum(goals, (x) => x.current))}</span>
           <span>Monthly goal contributions</span><span>${money(sum(state.goals, (g) => g.monthly))}</span>
           <span>Still needed</span><span>${money(sum(goals, ({ p }) => p.remaining))}</span>
         </div></div>
@@ -47,6 +50,20 @@ export async function render(el, ctx) {
   on(el, 'change', '[data-field]', (e, inp) => {
     const g = state.goals.find((x) => x.id === inp.dataset.id);
     update('goals', () => { g[inp.dataset.field] = inp.type === 'number' ? Math.max(0, Number(inp.value) || 0) : inp.value; });
+    ctx.refresh();
+  });
+  on(el, 'change', '[data-link]', (e, sel) => {
+    const g = state.goals.find((x) => x.id === sel.dataset.link);
+    update('goals', () => {
+      g.link = sel.value;
+      const [kind, ref] = sel.value.split(':');
+      if (kind === 'debts' || kind === 'debt') {
+        // Progress = how much of today's balance has been paid off since linking.
+        const owed = sum(state.debts.filter((d) => (kind === 'debt' ? d.id === ref : d.kind === ref)), (d) => d.balance);
+        g.startBalance = owed;
+        if (!g.target) g.target = owed;
+      }
+    });
     ctx.refresh();
   });
   on(el, 'click', '[data-fix]', (e, b) => { update('goals', (l) => { l.find((x) => x.id === b.dataset.fix).monthly = Number(b.dataset.amount); }); ctx.refresh(); });

@@ -7,9 +7,10 @@ import {
   computeShifts, earningsForMonth, paychecks, yearTaxProjection, annualTax, shiftHours,
   PAY_FREQUENCIES, FILING_STATUSES, TAX_TABLES,
 } from '../calc.js';
-import { parseScheduleRows, parseScheduleText, parseICS } from '../parse.js';
+import { parseScheduleRows, parseScheduleText, parseICS, personMatches } from '../parse.js';
 import { barChart, seriesColor } from '../charts.js';
 import { uploadFiles, ocr, prepareForAI } from './receipts.js';
+import { replaceEstimate } from '../automation.js';
 
 let tab = 'overview';
 let pending = null; // parsed schedule awaiting confirmation
@@ -33,13 +34,18 @@ export async function render(el, ctx) {
     return;
   }
   ({ overview, shifts: shiftsTab, jobs: jobsTab, stubs: stubsTab, tax: taxTab })[tab](body, ctx);
+  if (ctx.params.get('add') === '1' && tab === 'shifts') {
+    ctx.params.delete('add');
+    history.replaceState(null, '', '#/income?tab=shifts');
+    if (await shiftForm(null, ctx)) ctx.refresh();
+  }
 }
 
 /* ====================== Overview ====================== */
 function overview(el, ctx) {
   const e = earningsForMonth(state, ctx.month);
   const upcoming = paychecks(state, { from: today(), to: addDays(today(), 45) });
-  const recorded = new Set(state.transactions.filter((t) => t.paycheckKey).map((t) => t.paycheckKey));
+  const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
 
   // Weekly breakdown for the chart
   const weeks = [...new Set(e.shifts.map((s) => s.week))].sort();
@@ -104,11 +110,13 @@ function overview(el, ctx) {
       onSubmit: (f, v) => v,
     });
     if (!amount) return;
-    update('transactions', (l) => l.push({
-      id: uid('tx'), type: 'income', date: amount.date, amount: round2(amount.amount), merchant: pc.job.name, sourceId: pc.job.sourceId || 'salary',
-      categoryId: '', source: 'paycheck', paycheckKey: b.dataset.record, note: `Pay period ${fmtDate(pc.start)}–${fmtDate(pc.end)} · ${num(pc.hours, 1)} hrs`, createdAt: new Date().toISOString(),
-    }));
-    toast('Paycheck recorded as income');
+    const record = {
+      type: 'income', date: amount.date, amount: round2(amount.amount), merchant: pc.job.name, sourceId: pc.job.sourceId || 'salary',
+      categoryId: '', source: 'paycheck', paycheckKey: b.dataset.record, estimated: false, note: `Pay period ${fmtDate(pc.start)}–${fmtDate(pc.end)} · ${num(pc.hours, 1)} hrs`,
+    };
+    const existing = state.transactions.find((t) => t.paycheckKey === b.dataset.record);
+    update('transactions', (l) => { if (existing) Object.assign(existing, record); else l.push({ id: uid('tx'), createdAt: new Date().toISOString(), ...record }); });
+    toast(existing ? 'Paycheck confirmed' : 'Paycheck recorded as income');
     ctx.refresh();
   });
   on(el, 'click', '[data-breakdown]', (ev, b) => {
@@ -132,7 +140,7 @@ function paycheckTable(list, recorded) {
       <td class="num neg">−${money(p.total + p.preTax)}</td>
       <td class="num pos"><strong>${money(p.net)}</strong></td>
       <td class="actions"><button class="btn small" data-breakdown="${key}">Breakdown</button>
-        ${recorded.has(key) ? '<span class="badge good">✓ Recorded</span>' : `<button class="btn small" data-record="${key}">Record</button>`}</td>
+        ${recorded.get(key)?.estimated ? `<button class="btn small" data-record="${key}" title="Added automatically on payday — confirm the real amount">Estimated · confirm</button>` : recorded.has(key) ? '<span class="badge good">✓ Received</span>' : p.payday <= today() ? `<button class="btn small" data-record="${key}">Record</button>` : '<span class="small muted">upcoming</span>'}</td>
     </tr>`;
   }).join('')}</tbody></table></div>`;
 }
@@ -177,10 +185,8 @@ function shiftsTab(el, ctx) {
         <div class="card-head"><div><h2>Upload your work schedule</h2><p>Screenshot or photo of the roster, a PDF, a spreadsheet/CSV, or a calendar (.ics) export.</p></div>
           <span class="badge ${ctx.ai.enabled ? 'good' : ''}">${ctx.ai.enabled ? '✓ AI reading on' : 'On-device reading'}</span></div>
         ${busy ? `<div class="alert info"><span class="alert-icon">⏳</span><div>${esc(busy)}</div></div>` : `
-        <div class="form-grid" style="margin-bottom:12px">
-          <label class="field">Assign shifts to job<select id="schedJob">${options(state.jobs, state.jobs[0]?.id)}</select></label>
-          <label class="field">Your name on the schedule<input id="schedPerson" value="${esc(state.settings.schedulePerson || '')}" placeholder="Only if the roster lists several people"></label>
-        </div>
+        <label class="field" style="margin-bottom:12px">Your name(s) as they appear on schedules — comma-separated
+          <input id="schedNames" value="${esc(myAliases().join(', '))}" placeholder="e.g. Arnab, Arnab Das, A. Das"></label>
         <label class="dropzone" id="schedDrop">
           <div class="big">🗓</div><div><strong>Drop schedule here</strong> or click to choose</div>
           <div class="small muted">PNG/JPG/PDF · XLSX/CSV · ICS</div>
@@ -230,7 +236,12 @@ function shiftsTab(el, ctx) {
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); go(e.dataTransfer.files); });
-    $('#schedPerson', el).addEventListener('change', (e) => update('settings', (s) => { s.schedulePerson = e.target.value.trim(); }, { silent: true }));
+    $('#schedNames', el).addEventListener('change', (e) => {
+      const names = e.target.value.split(',').map((x) => x.trim()).filter(Boolean);
+      update('settings', (st) => { st.schedulePerson = names[0] || ''; st.scheduleAliases = names.slice(1); });
+      if (pending) buildRows();
+      ctx.refresh();
+    });
   }
   on(el, 'click', '[data-action=add-shift]', async () => { if (await shiftForm(null, ctx)) ctx.refresh(); });
   on(el, 'click', '[data-edit-shift]', async (e, b) => { if (await shiftForm(state.shifts.find((s) => s.id === b.dataset.editShift), ctx)) ctx.refresh(); });
@@ -252,11 +263,27 @@ function calendar(month, shifts) {
   return `<div class="cal">${DAY_NAMES.map((n) => `<div class="cal-head">${n}</div>`).join('')}${cells.join('')}</div>`;
 }
 
+export const myAliases = () => [state.settings.schedulePerson, ...(state.settings.scheduleAliases || [])].filter(Boolean);
+
+function rememberAlias(name) {
+  update('settings', (st) => {
+    if (!st.schedulePerson) st.schedulePerson = name;
+    else if (![st.schedulePerson, ...(st.scheduleAliases ||= [])].some((a) => a.toLowerCase() === name.toLowerCase())) st.scheduleAliases.push(name);
+  });
+}
+
+// Upload from anywhere (Home, Income): opens the Schedule tab and starts reading.
+export async function startSchedule(files, ctx) {
+  tab = 'shifts';
+  if (!state.jobs.length && !(await jobForm())) return;
+  ctx.go('income', 'tab=shifts');
+  readSchedule([...files], ctx);
+}
+
 async function readSchedule(files, ctx) {
-  const jobId = $('#schedJob')?.value || state.jobs[0]?.id;
-  const person = $('#schedPerson')?.value.trim() || '';
   try {
     let result;
+    let uploaded = [];
     const f = files[0];
     if (/\.ics$/i.test(f.name) || f.type === 'text/calendar') {
       result = parseICS(await f.text());
@@ -268,10 +295,10 @@ async function readSchedule(files, ctx) {
       result = parseScheduleRows(window.XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }));
     } else {
       busy = 'Uploading…'; ctx.refresh();
-      const uploaded = await uploadFiles('schedules', await prepareForAI(files, ctx.ai));
+      uploaded = await uploadFiles('schedules', await prepareForAI(files, ctx.ai));
       if (ctx.ai.enabled) {
-        busy = 'Reading your schedule with AI… (10–40 seconds)'; ctx.refresh();
-        try { result = await api('/api/ai/schedule', { method: 'POST', body: { files: uploaded, person } }); } catch (err) { toast(`AI reading failed (${err.message}); trying on-device OCR`, 'bad'); }
+        busy = 'Reading every shift on your schedule — three independent readings, usually 30–90 seconds…'; ctx.refresh();
+        try { result = await api('/api/ai/schedule', { method: 'POST', body: { files: uploaded, aliases: myAliases() } }); } catch (err) { toast(`AI reading failed (${err.message}); trying on-device OCR`, 'bad'); }
       }
       if (!result) {
         busy = 'Reading text on this device…'; ctx.refresh();
@@ -279,10 +306,20 @@ async function readSchedule(files, ctx) {
       }
     }
     pending = {
-      jobId, notes: result.notes, employer: result.employer, hourlyRate: result.hourly_rate,
-      shifts: result.shifts.map((s) => ({ ...s, include: true })),
+      jobId: state.jobs[0]?.id,
+      files: uploaded,
+      notes: result.notes,
+      hourlyRate: result.hourly_rate,
+      people: result.people || [],
+      readers: result.readers || 1,
+      period: { start: result.period_start || '', end: result.period_end || '' },
+      all: result.shifts.map((x) => ({ ...x, start: x.start?.slice(0, 5), end: x.end?.slice(0, 5) })),
+      person: null,
+      rows: [],
+      replace: true,
     };
-    if (!pending.shifts.length) toast('No shifts found in that file. Try a clearer image or add them manually.', 'bad');
+    buildRows();
+    if (!pending.all.length) toast('No shifts found in that file. Try a clearer image or add them manually.', 'bad');
   } catch (err) {
     toast(err.message, 'bad');
   } finally {
@@ -291,40 +328,104 @@ async function readSchedule(files, ctx) {
   }
 }
 
+// Pick out the user's shifts: by an explicitly chosen name, else by saved aliases.
+// A schedule with no names (or a single person) is entirely the user's.
+function buildRows() {
+  if (!pending) return;
+  const named = pending.all.some((x) => x.person) && pending.people.length > 1;
+  const aliases = pending.person ? [pending.person] : myAliases();
+  const mine = !named ? pending.all : pending.all.filter((x) => (pending.person ? x.person === pending.person || personMatches(x.person, aliases) : personMatches(x.person, aliases)));
+  pending.needsName = named && !mine.length;
+  pending.rows = mine.map((x) => ({ ...x, include: !x.suspect }));
+}
+
+// Dates the schedule covers (for the "your week at a glance" strip), padded to whole weeks.
+function scheduleRange() {
+  const dates = pending.all.map((x) => x.date).concat(pending.rows.map((x) => x.date)).filter(Boolean).sort();
+  return { from: [pending.period.start, dates[0]].filter(Boolean).sort()[0], to: [pending.period.end, dates.at(-1)].filter(Boolean).sort().at(-1) };
+}
+
+function coverageDates() {
+  const dates = pending.all.map((x) => x.date).concat(pending.rows.map((x) => x.date)).filter(Boolean).sort();
+  let from = pending.period.start || dates[0];
+  let to = pending.period.end || dates.at(-1);
+  if (!from || !to) return [];
+  if (dates[0] && dates[0] < from) from = dates[0];
+  if (dates.at(-1) && dates.at(-1) > to) to = dates.at(-1);
+  const out = [];
+  for (let d = startOfWeek(from, state.settings.weekStartsOn || 0); d <= to || out.length % 7; d = addDays(d, 1)) { out.push(d); if (out.length > 63) break; }
+  return out;
+}
+
 function renderPending(box, ctx) {
   if (!pending) return;
   const job = state.jobs.find((j) => j.id === pending.jobId);
-  const dupes = new Set(state.shifts.map((s) => `${s.jobId}|${s.date}|${s.start}`));
-  box.innerHTML = `<div class="card flush" style="margin-top:16px">
-    <div class="card-head"><div><h2>Review ${pending.shifts.length} shifts found</h2><p>${esc(pending.notes || '')}</p></div>
-      <div class="row"><button class="btn" data-action="cancel-pending">Discard</button><button class="btn primary" data-action="save-pending">Add selected shifts</button></div></div>
-    ${pending.hourlyRate && job && Math.abs(pending.hourlyRate - job.rate) > 0.01 ? `<div class="alert info" style="margin:0 16px 12px"><span class="alert-icon">i</span><div>The schedule shows a rate of ${money(pending.hourlyRate)}/hr; ${esc(job.name)} is set to ${money(job.rate)}/hr. <button class="btn small" data-action="use-rate">Use ${money(pending.hourlyRate)}</button></div></div>` : ''}
-    <div class="table-wrap"><table class="table-compact">
-      <thead><tr><th></th><th>Date</th><th>Start</th><th>End</th><th>Break (min)</th><th>Role / notes</th><th class="num">Hours</th></tr></thead>
-      <tbody>${pending.shifts.map((s, i) => `<tr>
-        <td><input type="checkbox" data-p="${i}" data-field="include" ${s.include ? 'checked' : ''}></td>
-        <td><input type="date" class="cell" data-p="${i}" data-field="date" value="${esc(s.date)}"></td>
-        <td><input type="time" class="cell" data-p="${i}" data-field="start" value="${esc(s.start)}"></td>
-        <td><input type="time" class="cell" data-p="${i}" data-field="end" value="${esc(s.end)}"></td>
-        <td><input type="number" class="cell num" data-p="${i}" data-field="break_minutes" value="${s.break_minutes || 0}" style="width:80px"></td>
-        <td><input class="cell" data-p="${i}" data-field="role" value="${esc([s.role, s.location].filter(Boolean).join(' · '))}"></td>
-        <td class="num">${num(shiftHours({ start: s.start, end: s.end, breakMin: s.break_minutes }), 2)}${dupes.has(`${pending.jobId}|${s.date}|${s.start}`) ? ' <span class="badge warn">already added</span>' : ''}</td>
-      </tr>`).join('')}</tbody></table></div></div>`;
+  const rows = pending.rows;
+  const dates = coverageDates();
+  const inRange = dates.length ? [dates.find((d) => rows.some((r) => r.date === d) || pending.all.some((r) => r.date === d)) || dates[0], [...dates].reverse().find((d) => rows.some((r) => r.date === d) || pending.all.some((r) => r.date === d)) || dates.at(-1)] : null;
+  const existing = inRange ? state.shifts.filter((x) => x.jobId === pending.jobId && x.date >= inRange[0] && x.date <= inRange[1]) : [];
+  const img = pending.files?.find((f) => f.type?.startsWith('image/'));
+  const others = pending.people.filter((p) => !rows.some((r) => r.person === p));
+  const unsure = rows.filter((r) => pending.readers > 1 && r.votes < 2).length;
+
+  box.innerHTML = `<div class="card" style="margin-top:16px">
+    <div class="card-head"><div><h2>${pending.needsName ? 'Which one is you?' : `Your shifts: ${rows.filter((r) => r.include).length} found`}</h2>
+      <p>${pending.readers > 1 ? `Read ${pending.readers} times independently. ${unsure ? `<strong>${unsure} shift${unsure > 1 ? 's' : ''} showed up in only one reading — compare with the picture.</strong>` : 'The readings agree on every shift.'}` : esc(pending.notes || 'Check against your schedule.')}</p></div>
+      <div class="row"><button class="btn" data-action="cancel-pending">Discard</button>${pending.needsName ? '' : `<button class="btn primary" data-action="save-pending">Save ${rows.filter((r) => r.include).length} shifts</button>`}</div></div>
+    ${pending.needsName ? `<div class="alert info"><span class="alert-icon">?</span><div>This schedule lists ${pending.people.length} people and none matched your name${myAliases().length ? ` (${esc(myAliases().join(', '))})` : ''}. Pick yourself — the app will remember it.
+      <div class="row" style="margin-top:8px">${pending.people.map((p) => `<button class="btn small" data-me="${esc(p)}">${esc(p)}</button>`).join('')}</div></div></div>` : `
+    <div class="grid cols-3">
+      <div>${img ? `<a href="${esc(img.url)}" target="_blank" rel="noopener" title="Open full size"><img class="receipt-img" src="${esc(img.url)}" alt="Your schedule" style="max-height:420px"></a><div class="small muted">Click the picture to open it full size.</div>` : '<p class="small muted">No picture (file import).</p>'}
+        ${others.length ? `<p class="small muted" style="margin-top:8px">Also on this schedule: ${others.map(esc).join(', ')}. <button class="btn small ghost" data-action="not-me">Not you?</button></p>` : ''}</div>
+      <div class="span-2 stack">
+        ${dates.length ? `<div><div class="small muted" style="margin-bottom:4px">Your week${dates.length > 7 ? 's' : ''} at a glance — compare with the picture</div><div class="cal">${DAY_NAMES.slice(state.settings.weekStartsOn || 0).concat(DAY_NAMES.slice(0, state.settings.weekStartsOn || 0)).map((n) => `<div class="cal-head">${n}</div>`).join('')}
+          ${dates.map((d) => { const mine = rows.filter((r) => r.date === d && r.include); const { from, to } = scheduleRange(); const outside = d < from || d > to; return `<div class="cal-day ${outside ? 'out' : ''}" style="min-height:58px"><div class="cal-num">${fmtDate(d)}</div>${mine.length ? mine.map((r) => `<span class="cal-chip ${pending.readers > 1 && r.votes < 2 ? 'bill' : 'pay'}">${r.start}–${r.end}</span>`).join('') : `<span class="small muted">${outside ? '' : 'off'}</span>`}</div>`; }).join('')}</div></div>` : ''}
+        <div class="table-wrap"><table class="table-compact">
+          <thead><tr><th></th><th>Date</th><th>Start</th><th>End</th><th>Break</th><th>Printed as</th><th class="num">Hours</th><th></th></tr></thead>
+          <tbody>${rows.map((r, i) => `<tr>
+            <td><input type="checkbox" data-p="${i}" data-field="include" ${r.include ? 'checked' : ''} aria-label="Include"></td>
+            <td><input type="date" class="cell" data-p="${i}" data-field="date" value="${esc(r.date)}"></td>
+            <td><input type="time" class="cell" data-p="${i}" data-field="start" value="${esc(r.start)}"></td>
+            <td><input type="time" class="cell" data-p="${i}" data-field="end" value="${esc(r.end)}"></td>
+            <td><input type="number" class="cell num" data-p="${i}" data-field="break_minutes" value="${r.break_minutes || 0}" style="width:64px"></td>
+            <td class="small muted">${esc(r.time_text || '')}</td>
+            <td class="num">${num(shiftHours({ start: r.start, end: r.end, breakMin: r.break_minutes }), 2)}</td>
+            <td>${r.suspect ? '<span class="badge bad" title="Only one reading put a shift here, and the same hours appear on the next/previous day — usually a misread column. Tick it if it is real.">misread?</span>' : pending.readers > 1 ? (r.votes >= 2 ? `<span class="badge good" title="${r.votes} of ${pending.readers} readings found this shift">✓ ${r.votes}/${pending.readers}</span>` : '<span class="badge warn" title="Only one reading found this shift — compare with the picture">check</span>') : ''}</td>
+          </tr>`).join('')}</tbody></table></div>
+        <div class="row">
+          <button class="btn small" data-action="add-row">+ Add a shift it missed</button>
+          <span class="spacer"></span>
+          <label class="field" style="flex-direction:row;align-items:center;gap:6px">Job <select data-action="job">${options(state.jobs, pending.jobId)}</select></label>
+        </div>
+        ${existing.length ? `<label class="check"><input type="checkbox" data-action="replace" ${pending.replace ? 'checked' : ''}> Replace my ${existing.length} saved shift${existing.length > 1 ? 's' : ''} from ${fmtDate(inRange[0])} to ${fmtDate(inRange[1])} with this schedule (use when your schedule changed)</label>` : ''}
+        ${pending.hourlyRate && job && Math.abs(pending.hourlyRate - job.rate) > 0.01 ? `<div class="alert info"><span class="alert-icon">i</span><div>The schedule shows ${money(pending.hourlyRate)}/hr; ${esc(job.name)} is set to ${money(job.rate)}/hr. <button class="btn small" data-action="use-rate">Use ${money(pending.hourlyRate)}</button></div></div>` : ''}
+      </div>
+    </div>`}
+  </div>`;
 
   on(box, 'change', '[data-p]', (e, inp) => {
-    const s = pending.shifts[+inp.dataset.p];
-    s[inp.dataset.field] = inp.type === 'checkbox' ? inp.checked : inp.type === 'number' ? Number(inp.value) || 0 : inp.value;
+    const r = rows[+inp.dataset.p];
+    r[inp.dataset.field] = inp.type === 'checkbox' ? inp.checked : inp.type === 'number' ? Number(inp.value) || 0 : inp.value;
     ctx.refresh();
   });
+  on(box, 'click', '[data-me]', (e, b) => { rememberAlias(b.dataset.me); pending.person = b.dataset.me; buildRows(); toast(`Got it — “${b.dataset.me}” is you from now on`); ctx.refresh(); });
+  on(box, 'click', '[data-action=not-me]', () => { pending.needsName = true; ctx.refresh(); });
+  on(box, 'click', '[data-action=add-row]', () => { rows.push({ date: rows.at(-1)?.date || dates[0] || today(), start: '09:00', end: '17:00', break_minutes: 0, include: true, votes: pending.readers, time_text: 'added by you' }); ctx.refresh(); });
+  on(box, 'change', '[data-action=job]', (e) => { pending.jobId = e.target.value; ctx.refresh(); });
+  on(box, 'change', '[data-action=replace]', (e) => { pending.replace = e.target.checked; ctx.refresh(); });
   on(box, 'click', '[data-action=cancel-pending]', () => { pending = null; ctx.refresh(); });
   on(box, 'click', '[data-action=use-rate]', () => { update('jobs', () => { job.rate = pending.hourlyRate; }); ctx.refresh(); });
   on(box, 'click', '[data-action=save-pending]', () => {
-    const add = pending.shifts.filter((s) => s.include && s.date && s.start && s.end && !dupes.has(`${pending.jobId}|${s.date}|${s.start}`));
-    update('shifts', (l) => l.push(...add.map((s) => ({
-      id: uid('shift'), jobId: pending.jobId, date: s.date, start: s.start, end: s.end, breakMin: s.break_minutes || 0,
-      tips: 0, role: s.role || '', notes: s.notes || '', source: 'upload',
+    const replace = pending.replace && existing.length;
+    const removed = new Set(replace ? existing.map((x) => x.id) : []);
+    const keep = state.shifts.filter((x) => !removed.has(x.id));
+    const dupes = new Set(keep.map((x) => `${x.jobId}|${x.date}|${x.start}`));
+    const add = rows.filter((r) => r.include && r.date && r.start && r.end && !dupes.has(`${pending.jobId}|${r.date}|${r.start}`));
+    update('shifts', () => keep.concat(add.map((r) => ({
+      id: uid('shift'), jobId: pending.jobId, date: r.date, start: r.start, end: r.end, breakMin: r.break_minutes || 0,
+      tips: 0, role: r.role || '', notes: '', source: 'upload',
     }))));
-    toast(`Added ${add.length} shifts`);
+    toast(`Saved ${add.length} shifts${replace ? ` (replaced ${removed.size})` : ''} — paychecks and your budget are updated`);
     pending = null;
     ctx.refresh();
   });
@@ -414,6 +515,7 @@ async function jobForm(job) {
       <label class="field">Daily OT after (hours, 0 = off; CA = 8)<input type="number" name="dailyOtThreshold" value="${j.dailyOtThreshold || 0}"></label>
       <label class="field">Pre-tax deductions (% of gross)<input type="number" step="0.1" name="preTaxPct" value="${round2((j.preTaxPercent || 0) * 100)}"></label>
     </div>
+    <label class="check" style="margin-top:12px"><input type="checkbox" name="autoRecord" ${j.autoRecord === false ? '' : 'checked'}> Add each paycheck to income automatically on payday (estimated until you confirm it or upload the pay stub)</label>
     <h3 style="margin:16px 0 8px">Shift differentials</h3>
     <p class="small muted">Extra pay per hour for nights, weekends, holidays. Set the same start and end time for all-day.</p>
     <div id="diffs">${diffRows()}</div>
@@ -439,6 +541,7 @@ async function jobForm(job) {
         payFrequency: v.payFrequency, periodEndAnchor: v.periodEndAnchor, payLagDays: v.payLagDays, otMultiplier: v.otMultiplier || 1.5,
         otWeeklyThreshold: v.otWeeklyThreshold, dailyOtThreshold: v.dailyOtThreshold, preTaxPercent: (v.preTaxPct || 0) / 100,
         differentials: diffs.map((d) => ({ ...d, days: d.days.length === 7 ? [] : d.days })),
+        autoRecord: v.autoRecord,
       };
       update('jobs', (l) => { const i = l.findIndex((x) => x.id === record.id); if (i >= 0) l[i] = record; else l.push(record); });
       toast(job ? 'Job updated' : 'Job added — now upload your schedule');
@@ -515,8 +618,9 @@ function stubsTab(el, ctx) {
   on(el, 'click', '[data-stub-income]', (e, b) => {
     const s = state.paystubs.find((x) => x.id === b.dataset.stubIncome);
     const job = state.jobs.find((j) => j.name.toLowerCase() === (s.employer || '').toLowerCase());
-    const tx = { id: uid('tx'), type: 'income', date: s.pay_date, amount: round2(s.net_pay), merchant: s.employer || 'Paycheck', sourceId: job?.sourceId || 'salary', categoryId: '', source: 'paycheck', note: `Gross ${money(s.gross_pay)}`, createdAt: new Date().toISOString() };
-    update('transactions', (l) => l.push(tx));
+    const est = replaceEstimate(state, { date: s.pay_date, amount: s.net_pay, jobName: job?.name });
+    const tx = { id: est?.id || uid('tx'), type: 'income', date: s.pay_date, amount: round2(s.net_pay), merchant: s.employer || 'Paycheck', sourceId: job?.sourceId || est?.sourceId || 'salary', categoryId: '', source: 'paycheck', paycheckKey: est?.paycheckKey, estimated: false, note: `From pay stub · gross ${money(s.gross_pay)}`, createdAt: new Date().toISOString() };
+    update('transactions', (l) => (est ? l.map((t) => (t.id === est.id ? tx : t)) : l.concat(tx)));
     update('paystubs', () => { s.transactionId = tx.id; });
     toast('Net pay recorded as income');
     ctx.refresh();

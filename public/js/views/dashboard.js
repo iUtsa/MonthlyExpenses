@@ -1,7 +1,8 @@
 import { state, categoryName } from '../store.js';
-import { esc, money, pct, fmtDate, today, addDays, sum, monthLabel, monthsRange, statusBadge, $ } from '../util.js';
+import { esc, money, pct, fmtDate, today, addDays, sum, monthLabel, monthsRange, statusBadge, $, on } from '../util.js';
 import {
   monthSummary, netWorth, emergencyFund, highInterestDebt, healthScore, roadmap, billOccurrences, paychecks, projectSaving,
+  computeShifts, investmentSummary,
 } from '../calc.js';
 import { barChart, seriesColor, scoreRing } from '../charts.js';
 
@@ -36,8 +37,33 @@ export async function render(el, ctx) {
   if (state.debts.some((d) => d.balance > 0 && d.minPayment <= (d.balance * d.apr) / 12)) alerts.push(['bad', '!', 'A debt\'s minimum payment doesn\'t cover its interest. <a href="#/debts">Review</a>']);
 
   const isEmpty = !m.hasPlan && !state.transactions.length;
+  const week = computeShifts(state).filter((x) => x.date >= today() && x.date <= addDays(today(), 7));
+  const nextPay = paychecks(state, { from: today(), to: addDays(today(), 31) })[0];
+  const inv = investmentSummary(state);
 
   el.innerHTML = `
+    <div class="grid cols-3" style="margin-bottom:16px">
+      <div class="card span-2">
+        <div class="card-head"><div><h2>Add something</h2><p>Drop a file and it goes to the right place — expenses, shifts, paychecks and your budget update together.</p></div></div>
+        <div class="quick">
+          <label class="dropzone" data-drop="receipt"><div class="big">🧾</div><strong>Receipt</strong><div class="small muted">photo or PDF → sorted expenses</div><input type="file" accept="image/*,application/pdf" multiple hidden data-file="receipt"></label>
+          <label class="dropzone" data-drop="schedule"><div class="big">🗓</div><strong>Work schedule</strong><div class="small muted">screenshot, photo, PDF, CSV or .ics → shifts & pay</div><input type="file" accept="image/*,application/pdf,.csv,.xlsx,.xls,.ics,text/calendar" multiple hidden data-file="schedule"></label>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn small" data-quick="transaction">✎ Transaction</button>
+          <a class="btn small" href="#/income?tab=shifts&add=1">⏱ Shift</a>
+          <a class="btn small" href="#/bills">📅 Pay a bill</a>
+          <a class="btn small" href="#/investments">📈 Invest</a>
+          <a class="btn small" href="#/review">✓ Monthly review</a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Coming up</h2><a class="btn small" href="#/income?tab=shifts">Shifts</a></div>
+        ${week.length ? `<div class="list">${week.slice(0, 5).map((x) => `<div class="list-item"><span class="grow"><div class="title">${fmtDate(x.date, { weekday: 'short', month: 'short', day: 'numeric' })}</div><div class="small muted">${x.start}–${x.end} · ${esc(x.job?.name || '')}</div></span><span class="num small">${money(x.gross, { cents: false })}</span></div>`).join('')}</div>` : '<p class="small muted">No shifts in the next 7 days. Drop your schedule on the left.</p>'}
+        ${nextPay ? `<div class="alert good" style="margin-top:10px"><span class="alert-icon">$</span><div class="small">Next payday <strong>${fmtDate(nextPay.payday, { weekday: 'short', month: 'short', day: 'numeric' })}</strong>: about ${money(nextPay.net, { cents: false })} take-home</div></div>` : ''}
+        ${inv.accounts.length ? `<div class="kv small" style="margin-top:10px"><span>Invested</span><span>${money(inv.total, { cents: false })}</span><span>Adding monthly</span><span>${money(inv.monthlyYou + inv.monthlyMatch, { cents: false })}</span></div>` : ''}
+      </div>
+    </div>
     ${isEmpty ? `<div class="card" style="margin-bottom:16px">
       <div class="card-head"><div><h2>Welcome! Set up in four steps</h2><p>Your workbook's sinking funds, debts, goals and net worth are already loaded.</p></div></div>
       <div class="grid cols-4">
@@ -112,6 +138,23 @@ export async function render(el, ctx) {
         ${state.transactions.length ? `<div class="list">${[...state.transactions].sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 7).map((t) => `<div class="list-item"><span class="grow"><div class="title">${esc(t.merchant || '—')}</div><div class="small muted">${fmtDate(t.date)} · ${t.type === 'expense' ? esc(categoryName(t.categoryId)) : t.type}</div></span><span class="num ${t.type === 'income' ? 'pos' : ''}">${t.type === 'income' ? '+' : ''}${money(t.amount)}</span></div>`).join('')}</div>` : '<div class="empty small">No transactions yet. <a href="#/receipts">Scan a receipt</a></div>'}
       </div>
     </div>`;
+
+  for (const zone of el.querySelectorAll('[data-drop]')) {
+    const kind = zone.dataset.drop;
+    const start = async (files) => {
+      if (!files.length) return;
+      if (kind === 'receipt') (await import('./receipts.js')).startReceipt([...files], ctx);
+      else (await import('./income.js')).startSchedule([...files], ctx);
+    };
+    zone.querySelector('input').addEventListener('change', (e) => start(e.target.files));
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('over'); start(e.dataTransfer.files); });
+  }
+  on(el, 'click', '[data-quick=transaction]', async () => {
+    const { openTransactionForm } = await import('./transactions.js');
+    if (await openTransactionForm(ctx)) ctx.refresh();
+  });
 
   if (topCats.length) {
     barChart($('#catChart', el), {

@@ -32,13 +32,19 @@
             <input type="month" id="monthInput" aria-label="Month">
             <button class="icon-btn" data-step="1" aria-label="Next month">›</button>
           </div>
-          <button class="btn primary" id="quickAdd">+ Transaction</button>
+          <div class="add-wrap">
+            <button class="btn primary" id="quickAdd" aria-haspopup="menu">+ Add</button>
+            <div class="menu hidden" id="addMenu" role="menu"></div>
+          </div>
           <button class="icon-btn" id="themeBtn" aria-label="Toggle dark mode">◐</button>
         </div>
       </header>
+      <nav id="subnav" class="subnav hidden" aria-label="Section"></nav>
       <section id="view" class="view" tabindex="-1"></section>
     </main>
   </div>
+  <input type="file" id="globalReceipt" accept="image/*,application/pdf" multiple hidden>
+  <input type="file" id="globalSchedule" accept="image/*,application/pdf,.csv,.xlsx,.xls,.ics,text/calendar" multiple hidden>
   <div id="modalRoot"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
 

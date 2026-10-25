@@ -48,6 +48,15 @@ export async function render(el) {
           <li>If a minimum payment doesn't cover the monthly interest, the balance grows forever — the Debt page flags this.</li>
         </ul>
 
+        <h3>Investing (added)</h3>
+        <ul>
+          <li>Order of the next dollar: employer 401(k) match → HSA (if on a high-deductible plan) → Roth IRA → max the 401(k) → taxable brokerage. Clear high-interest debt and build the emergency fund before going past the match.</li>
+          <li>2026 limits: 401(k)/403(b) <strong>$24,500</strong> (+$8,000 catch-up at 50+), IRA <strong>$7,500</strong> (+$1,100), HSA <strong>$4,400</strong> self-only / <strong>$8,750</strong> family (+$1,000 at 55+).</li>
+          <li>Financial independence number ≈ 25× yearly spending (the 4% rule). Projections here use real (after-inflation) returns: 7% expected minus 3% inflation by default.</li>
+          <li>Low-cost broad index funds (or a target-date fund) are the research-consensus default; fees and frequent trading are the biggest drags on returns.</li>
+          <li>Many F-1 students can't open certain accounts or contribute to an IRA without earned US income — check eligibility first.</li>
+        </ul>
+
         <h3>Paychecks & taxes (added)</h3>
         <ul>
           <li>2026 federal figures (IRS Rev. Proc. 2025-32): standard deduction ${money(t.standard.single, { cents: false })} single / ${money(t.standard.mfj, { cents: false })} married filing jointly / ${money(t.standard.hoh, { cents: false })} head of household; brackets 10%–37%.</li>
@@ -64,7 +73,7 @@ export async function render(el) {
           <li>Subscriptions are easy to underestimate — audit them every few months (Bills page).</li>
           <li>The best budget is the one you will actually open and update. Scanning receipts the day you shop keeps it current.</li>
         </ul>
-        <p class="small muted">Sources: WalletHub 2026 budget percentages, Wealthvieu income-level studies, Bankrate, NerdWallet, Ramsey Solutions, CFPB spending guidance, Tiller/FinancialAha spreadsheet best practices; IRS Rev. Proc. 2025-32 and IRS guidance on the One Big Beautiful Bill Act deductions; SSA 2026 wage base. Tax figures are estimates, not tax advice.</p>
+        <p class="small muted">Sources: IRS 2026 contribution limits (via TIAA, ALPA benefit summaries), WalletHub 2026 budget percentages, Wealthvieu income-level studies, Bankrate, NerdWallet, Ramsey Solutions, CFPB spending guidance, Tiller/FinancialAha spreadsheet best practices; IRS Rev. Proc. 2025-32 and IRS guidance on the One Big Beautiful Bill Act deductions; SSA 2026 wage base. Tax figures are estimates, not tax advice.</p>
       </div>
       <div class="stack">
         <div class="card">

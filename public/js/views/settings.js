@@ -32,6 +32,7 @@ export async function render(el, ctx) {
           <label class="field">Monthly essential expenses<input type="number" data-s="monthlyEssentials" value="${s.monthlyEssentials}"></label>
           <label class="field">Emergency fund target (months)<input type="number" data-s="efTargetMonths" value="${s.efTargetMonths}" min="1" max="24"></label>
           <label class="field">“High-interest” debt is APR ≥ (%)<input type="number" step="0.5" data-s="highInterestApr" data-pct value="${round2(s.highInterestApr * 100)}"></label>
+          <label class="field span-2">Your name(s) on work schedules (comma-separated)<input data-names value="${esc([s.schedulePerson, ...(s.scheduleAliases || [])].filter(Boolean).join(', '))}" placeholder="Arnab, Arnab Das, A. Das"></label>
           <label class="field">Workweek starts on<select data-s="weekStartsOn">${options(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((n, i) => ({ id: i, name: n })), s.weekStartsOn)}</select></label>
         </div>
         <label class="check" style="margin-top:12px"><input type="checkbox" data-s="employerMatch" ${s.employerMatch ? 'checked' : ''}> I contribute enough to get my full employer retirement match</label>
@@ -120,6 +121,11 @@ export async function render(el, ctx) {
       else x[k] = k === 'weekStartsOn' ? Number(inp.value) : inp.value;
     });
     ctx.refresh();
+  });
+  on(el, 'change', '[data-names]', (e, inp) => {
+    const names = inp.value.split(',').map((x) => x.trim()).filter(Boolean);
+    update('settings', (x) => { x.schedulePerson = names[0] || ''; x.scheduleAliases = names.slice(1); });
+    toast(names.length ? `Schedules will pick out shifts for: ${names.join(', ')}` : 'Schedule names cleared');
   });
   on(el, 'change', '[data-custom]', (e, inp) => { update('settings', (x) => { x.customTargets[inp.dataset.custom] = (Number(inp.value) || 0) / 100; }); ctx.refresh(); });
   on(el, 'change', '[data-cat]', (e, inp) => {

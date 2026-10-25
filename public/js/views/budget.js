@@ -1,10 +1,20 @@
 import { state, update } from '../store.js';
-import { esc, money, pct, on, toast, sum, shiftMonth, monthLabel, round2, confirmDialog } from '../util.js';
-import { monthSummary, suggestPlan, earningsForMonth, BUCKETS } from '../calc.js';
+import { esc, money, pct, on, toast, sum, shiftMonth, monthLabel, confirmDialog } from '../util.js';
+import { monthSummary, suggestPlan, BUCKETS } from '../calc.js';
 
 function ensure(month) {
   update('budgets', (b) => { b[month] ||= { income: {}, planned: {}, notes: {} }; }, { silent: true });
   return state.budgets[month];
+}
+
+// Planned-amount cell: linked values show as a badge-marked placeholder; typed values override.
+function planInput(kind, r) {
+  const attr = kind === 'income' ? 'data-income' : 'data-plan';
+  const linked = r.auto;
+  return `<div class="row" style="flex-wrap:nowrap;gap:4px;justify-content:flex-end">
+    ${linked ? `<span class="badge info" title="${esc(linked.from)}">linked</span>` : r.link ? `<button class="icon-btn small" data-relink="${r.id}" data-kind="${kind}" title="Back to linked value (${esc(r.link.from)}: ${money(r.link.value)})">↺</button>` : ''}
+    <input class="cell num" type="number" step="1" min="0" ${attr}="${r.id}" data-key="${kind}-${r.id}" value="${linked ? '' : r.planned || ''}" placeholder="${linked ? Math.round(r.planned) : '0'}" style="width:90px" title="${linked ? esc(linked.from) : ''}">
+  </div>`;
 }
 
 function meterClass(actual, planned) {
@@ -16,9 +26,6 @@ function meterClass(actual, planned) {
 export async function render(el, ctx) {
   const month = ctx.month;
   const m = monthSummary(state, month);
-  const earnings = earningsForMonth(state, month);
-  const bySource = {};
-  for (const j of earnings.byJob) if (j.job.sourceId) bySource[j.job.sourceId] = (bySource[j.job.sourceId] || 0) + j.paidNet;
   const notes = state.budgets[month]?.notes || {};
   const rta = m.remainingToAssign;
   const prev = shiftMonth(month, -1);
@@ -32,7 +39,7 @@ export async function render(el, ctx) {
     return `<tr>
       <td><a href="#/transactions" data-cat-link="${r.id}" class="text-2" style="text-decoration:none">${esc(r.name)}</a>${r.count ? ` <span class="small muted">· ${r.count}</span>` : ''}</td>
       <td class="small muted">${esc(r.suggested)}${m.plannedIncome && r.planned ? ` <span class="${r.mid && share > r.mid * 1.5 ? 'neg' : ''}">(${pct(share, 1)})</span>` : ''}</td>
-      <td style="width:130px"><input class="cell num" type="number" step="1" min="0" data-plan="${r.id}" data-key="plan-${r.id}" value="${r.planned || ''}" placeholder="0"></td>
+      <td style="width:150px">${planInput('plan', r)}</td>
       <td class="num">${money(r.actual)}</td>
       <td class="num ${diff < 0 ? 'neg' : ''}">${money(diff)}</td>
       <td style="width:120px"><div class="meter ${meterClass(r.actual, r.planned)}"><span style="width:${r.planned ? Math.min(100, (r.actual / r.planned) * 100) : r.actual ? 100 : 0}%"></span></div></td>
@@ -53,23 +60,21 @@ export async function render(el, ctx) {
         <strong>${monthLabel(month)}</strong><span class="spacer"></span>
         <button class="btn small" data-action="copy">Copy plan from ${monthLabel(prev, 'short')}</button>
         <button class="btn small" data-action="autofill">Auto-fill from ${esc(m.targets.rule)} targets</button>
-        <button class="btn small" data-action="linked">Fill sinking funds & debt lines</button>
         <button class="btn small danger" data-action="clear">Clear plan</button>
       </div>
     </div>
 
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card flush">
-        <div class="card-head"><div><h2>Income (take-home)</h2><p>Actuals come from income transactions. Shift-based estimates come from Income & shifts.</p></div></div>
+        <div class="card-head"><div><h2>Income (take-home)</h2><p>Lines marked <span class="badge info">linked</span> follow your shifts automatically; type a number to override.</p></div></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Source</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">From schedule</th></tr></thead>
+          <thead><tr><th>Source</th><th class="num">Planned</th><th class="num">Actual</th></tr></thead>
           <tbody>${m.income.map((s) => `<tr>
             <td>${esc(s.name)}</td>
-            <td style="width:130px"><input class="cell num" type="number" step="1" min="0" data-income="${s.id}" data-key="inc-${s.id}" value="${s.planned || ''}" placeholder="0"></td>
+            <td style="width:150px">${planInput('income', s)}</td>
             <td class="num">${money(s.actual)}</td>
-            <td class="num">${bySource[s.id] ? `${money(bySource[s.id])} <button class="btn small" data-use="${s.id}" data-amount="${round2(bySource[s.id])}">Use</button>` : '<span class="muted">—</span>'}</td>
           </tr>`).join('')}</tbody>
-          <tfoot><tr><td>Total income</td><td class="num">${money(m.plannedIncome)}</td><td class="num">${money(m.actualIncome)}</td><td class="num">${earnings.paidNet ? money(earnings.paidNet) : ''}</td></tr></tfoot>
+          <tfoot><tr><td>Total income</td><td class="num">${money(m.plannedIncome)}</td><td class="num">${money(m.actualIncome)}</td></tr></tfoot>
         </table></div>
       </div>
       <div class="card">
@@ -91,7 +96,7 @@ export async function render(el, ctx) {
     </div>
 
     <div class="card flush" style="margin-top:16px">
-      <div class="card-head"><div><h2>Expenses — every dollar has a job</h2><p>Enter planned amounts; actuals fill in from transactions and scanned receipts.</p></div></div>
+      <div class="card-head"><div><h2>Expenses — every dollar has a job</h2><p>Actuals fill in from transactions, receipts, bills and contributions. <span class="badge info">linked</span> lines come from your bills, sinking funds, debts and investments — type to override, ↺ to re-link.</p></div></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Category</th><th>Suggested % of income</th><th class="num">Planned</th><th class="num">Actual</th><th class="num">Difference</th><th>Used</th></tr></thead>
         <tbody>
@@ -124,21 +129,15 @@ export async function render(el, ctx) {
       </div>
     </div>`;
 
-  on(el, 'change', '[data-plan]', (e, inp) => {
+  const setPlan = (kind, id, value) => {
     const b = ensure(month);
-    update('budgets', () => { b.planned[inp.dataset.plan] = Math.max(0, Number(inp.value) || 0); });
+    const key = kind === 'income' ? 'income' : 'planned';
+    update('budgets', () => { if (value === '') delete b[key][id]; else b[key][id] = Math.max(0, Number(value) || 0); });
     ctx.refresh();
-  });
-  on(el, 'change', '[data-income]', (e, inp) => {
-    const b = ensure(month);
-    update('budgets', () => { b.income[inp.dataset.income] = Math.max(0, Number(inp.value) || 0); });
-    ctx.refresh();
-  });
-  on(el, 'click', '[data-use]', (e, btn) => {
-    const b = ensure(month);
-    update('budgets', () => { b.income[btn.dataset.use] = Number(btn.dataset.amount); });
-    ctx.refresh();
-  });
+  };
+  on(el, 'change', '[data-plan]', (e, inp) => setPlan('plan', inp.dataset.plan, inp.value));
+  on(el, 'change', '[data-income]', (e, inp) => setPlan('income', inp.dataset.income, inp.value));
+  on(el, 'click', '[data-relink]', (e, b) => setPlan(b.dataset.kind, b.dataset.relink, ''));
   on(el, 'change', '[data-note]', (e, t) => {
     const b = ensure(month);
     update('budgets', () => { b.notes._month = t.value; }, { silent: true });
@@ -158,18 +157,10 @@ export async function render(el, ctx) {
     if (!m.plannedIncome) return toast('Enter planned income first', 'bad');
     if (m.plannedExpense && !(await confirmDialog('Replace the planned expense amounts with target-based suggestions?', { okLabel: 'Replace' }))) return;
     const b = ensure(month);
-    update('budgets', () => { b.planned = suggestPlan(state, m.plannedIncome); });
+    const suggested = suggestPlan(state, m.plannedIncome);
+    for (const r of m.rows) if (r.link) delete suggested[r.id]; // keep linked lines linked
+    update('budgets', () => { b.planned = suggested; });
     toast('Plan filled from targets — adjust to your real bills');
-    ctx.refresh();
-  });
-  on(el, 'click', '[data-action=linked]', () => {
-    const b = ensure(month);
-    update('budgets', () => {
-      b.planned.sinking_funds = round2(sinkingTotal);
-      b.planned.min_debt = round2(minDebt);
-      b.planned.extra_debt = round2(extraDebt);
-    });
-    toast('Sinking funds, debt minimums and extra debt payment filled in');
     ctx.refresh();
   });
   on(el, 'click', '[data-action=clear]', async () => {

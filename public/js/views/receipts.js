@@ -205,6 +205,13 @@ function blankDraft(files, parsedBy) {
   return { id: uid('rcpt'), files, parsedBy, merchant: '', date: today(), payment_method: '', items: [], subtotal: 0, tax: 0, tip: 0, fees: 0, discount: 0, total: 0, notes: '', confidence: '', transactionIds: [], isNew: true };
 }
 
+// Start a scan from anywhere (Home, + Add menu): opens this page and processes the files.
+export function startReceipt(files, ctx) {
+  draft = null;
+  ctx.go('receipts');
+  processFiles(files, ctx);
+}
+
 async function processFiles(rawFiles, ctx) {
   try {
     busy = { label: 'Preparing images…', progress: 0.05 }; ctx.refresh();

@@ -5,6 +5,7 @@ import {
 } from '../util.js';
 import { autoCategorize } from '../calc.js';
 import { parseAnyDate, guessCsvColumns, toNumber } from '../parse.js';
+import { dismissPaycheck, replaceEstimate } from '../automation.js';
 
 const SOURCE_BADGE = { receipt: '🧾 Receipt', import: '⇩ Import', paycheck: '⏱ Paycheck', bill: '📅 Bill', manual: '' };
 let filters = { q: '', type: '', category: '', scope: 'month', source: '' };
@@ -140,6 +141,7 @@ export async function render(el, ctx) {
   });
   on(el, 'click', '[data-action=delete]', async (e, b) => {
     if (!(await confirmDialog('Delete this transaction?'))) return;
+    dismissPaycheck(state.transactions.find((t) => t.id === b.dataset.id));
     update('transactions', (l) => l.filter((t) => t.id !== b.dataset.id));
     ctx.refresh();
   });
@@ -170,6 +172,7 @@ export async function render(el, ctx) {
   on(el, 'click', '[data-action=bulk-delete]', async () => {
     const ids = new Set(selected());
     if (!(await confirmDialog(`Delete ${ids.size} transactions?`))) return;
+    state.transactions.filter((t) => ids.has(t.id)).forEach(dismissPaycheck);
     update('transactions', (l) => l.filter((t) => !ids.has(t.id)));
     ctx.refresh();
   });
@@ -267,7 +270,13 @@ async function importCSV() {
           sourceId: type === 'income' ? (/payroll|direct dep|salary/i.test(merchant) ? 'salary' : 'other_income') : '',
         });
       }
-      update('transactions', (l) => { l.push(...added); });
+      // A deposit from the bank replaces the matching estimated paycheck.
+      const replaced = new Set();
+      for (const t of added.filter((x) => x.type === 'income')) {
+        const est = replaceEstimate({ transactions: state.transactions.filter((x) => !replaced.has(x.id)) }, { date: t.date, amount: t.amount });
+        if (est) { replaced.add(est.id); t.sourceId = est.sourceId; t.paycheckKey = est.paycheckKey; }
+      }
+      update('transactions', (l) => l.filter((x) => !replaced.has(x.id)).concat(added));
       const uncategorized = added.filter((t) => t.type === 'expense' && !t.categoryId).length;
       toast(`Imported ${added.length} transactions${skipped ? `, skipped ${skipped}` : ''}${uncategorized ? ` — ${uncategorized} need a category` : ''}`);
       return true;

@@ -1,7 +1,7 @@
 // Default data, taken from Monthly_Financial_Planner_Dynamic.xlsx (the baseline workbook)
 // and extended with the extra structures the web app needs.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // The 22 expense lines of the "Monthly Budget" sheet. `mid` is the midpoint of the
 // suggested % range, used by "Auto-fill from targets".
@@ -116,7 +116,7 @@ let n = 0;
 const uid = (p) => `${p}_${Date.now().toString(36)}${(n++).toString(36)}`;
 
 export function createSeed() {
-  return {
+  const data = {
     version: SCHEMA_VERSION,
     settings: {
       name: 'My Household',
@@ -170,4 +170,57 @@ export function createSeed() {
     })),
     reviews: {},
   };
+  // Link the workbook's goals to the balances they track.
+  const goal = (name) => data.goals.find((g) => g.name.startsWith(name));
+  const fund = (name) => data.sinkingFunds.find((f) => f.name.startsWith(name));
+  goal('Fully Funded Emergency Fund').link = 'asset:savings';
+  Object.assign(goal('Pay off all Credit Cards'), { link: 'debts:credit_card', startBalance: 4700 });
+  goal('Vacation / Travel Fund').link = `sinking:${fund('Vacation').id}`;
+  return migrate(data);
+}
+
+/* ---------- Investments ---------- */
+const DEFAULT_ALLOCATION = {
+  '401k': { us_stock: 0.6, intl_stock: 0.3, bonds: 0.1, cash: 0, other: 0 },
+  roth_401k: { us_stock: 0.6, intl_stock: 0.3, bonds: 0.1, cash: 0, other: 0 },
+  trad_ira: { us_stock: 0.6, intl_stock: 0.3, bonds: 0.1, cash: 0, other: 0 },
+  roth_ira: { us_stock: 0.6, intl_stock: 0.3, bonds: 0.1, cash: 0, other: 0 },
+  hsa: { us_stock: 0.7, intl_stock: 0.2, bonds: 0, cash: 0.1, other: 0 },
+  brokerage: { us_stock: 0.8, intl_stock: 0.2, bonds: 0, cash: 0, other: 0 },
+  crypto: { us_stock: 0, intl_stock: 0, bonds: 0, cash: 0, other: 1 },
+  '529': { us_stock: 0.6, intl_stock: 0.2, bonds: 0.2, cash: 0, other: 0 },
+  other: { us_stock: 0, intl_stock: 0, bonds: 0, cash: 0, other: 1 },
+};
+
+export function newInvestmentAccount(type = 'brokerage', fields = {}) {
+  return {
+    id: uid('inv'), name: '', type, balance: 0, monthly: 0,
+    employerMatchRate: 0, employerMatchUpTo: 0,
+    allocation: { ...(DEFAULT_ALLOCATION[type] || DEFAULT_ALLOCATION.other) },
+    updatedAt: '', ...fields,
+  };
+}
+
+// Upgrades older saved data in place. Safe to run repeatedly.
+export function migrate(data) {
+  if (!data.investing) {
+    data.investing = {
+      accounts: [],
+      settings: { currentAge: 25, retireAge: 65, expectedReturn: 0.07, inflation: 0.03, withdrawalRate: 0.04, retirementSpending: 0, age50Plus: false, hsaCoverage: 'self' },
+      history: [],
+    };
+    // v1 kept investments as two hand-typed Net Worth rows; they become real accounts.
+    const take = (id, type) => {
+      const row = data.netWorth?.assets?.find((a) => a.id === id);
+      if (!row) return;
+      data.investing.accounts.push(newInvestmentAccount(type, { name: row.name, balance: Number(row.value) || 0 }));
+      data.netWorth.assets = data.netWorth.assets.filter((a) => a !== row);
+    };
+    take('retirement', '401k');
+    take('investments', 'brokerage');
+  }
+  data.settings ||= {};
+  data.settings.scheduleAliases ||= [];
+  data.version = SCHEMA_VERSION;
+  return data;
 }

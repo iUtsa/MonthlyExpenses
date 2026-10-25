@@ -162,6 +162,18 @@ small, .small { font-size: 12px; }
 .view { padding: 24px; max-width: 1320px; width: 100%; outline: none; }
 .scrim { display: none; }
 
+/* ---------- Section tabs & add menu ---------- */
+.subnav { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--page); overflow-x: auto; }
+.subnav a { padding: 10px 12px; color: var(--text-2); text-decoration: none; font-weight: 550; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.subnav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+.subnav a:hover { color: var(--text); }
+.add-wrap { position: relative; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); padding: 6px; min-width: 230px; display: flex; flex-direction: column; }
+.menu button { text-align: left; border: 0; background: none; padding: 9px 10px; border-radius: 7px; cursor: pointer; font-weight: 500; }
+.menu button:hover { background: var(--surface-2); }
+.quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.quick .dropzone { padding: 18px; }
+
 /* ---------- Controls ---------- */
 button, input, select, textarea { font: inherit; color: inherit; }
 input, select, textarea {
@@ -275,7 +287,7 @@ tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 12p
 
 /* ---------- Upload ---------- */
 .dropzone {
-  border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 28px; text-align: center; cursor: pointer;
+  display: block; border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 28px; text-align: center; cursor: pointer;
   background: var(--surface); transition: border-color 0.15s, background 0.15s;
 }
 .dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
@@ -353,7 +365,8 @@ tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 12p
   .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
   .grid .span-2 { grid-column: auto; }
   .form-grid .span-2 { grid-column: auto; }
-  #quickAdd { display: none; }
+  .subnav { padding: 0 12px; }
+  .quick { grid-template-columns: minmax(0, 1fr); }
   .month-picker input { width: 122px; }
   .cal-day { min-height: 54px; }
   .hero-value { font-size: 36px; }

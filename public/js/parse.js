@@ -227,3 +227,65 @@ export function toNumber(v) {
   const n = Number(s.replace(/[^0-9.]/g, '')) || 0;
   return negative ? -n : n;
 }
+
+/* ---------------- Shift times & names (schedule reading) ---------------- */
+const HALF = String.raw`(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m?\.?|p\.?m?\.?|noon)?`;
+const SHIFT_RANGE = new RegExp(`${HALF}\\s*(?:-|–|—|to|until|till)\\s*${HALF}`, 'i');
+const hm = (h, m) => `${String(((h % 24) + 24) % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+
+// Turn printed shift text into 24h start/end. Explicit am/pm and 24-hour times are used
+// as written. Bare 12-hour ranges ("1-5", "3-11", "9:30-5:30") follow how work schedules
+// are written: starts 1–5 are afternoon, 6–11 morning, 12 noon; the end is the first
+// matching hour after the start (so "11-7" is 11:00–19:00, "4-12" is 16:00–00:00).
+// Returns null when the text has no time range.
+export function resolveShiftTimes(text) {
+  const m = String(text || '').replace(/\s+/g, ' ').match(SHIFT_RANGE);
+  if (!m) return null;
+  const side = (h, min, mer, raw) => {
+    const hour = Number(h); const minute = Number(min || 0);
+    if (hour > 24 || minute > 59) return null;
+    const meridiem = mer ? (mer[0].toLowerCase() === 'n' ? 'p' : mer[0].toLowerCase()) : null;
+    const is24 = hour >= 13 || hour === 0 || (/^0\d/.test(raw) && min !== undefined);
+    return { hour, minute, meridiem, is24 };
+  };
+  const a = side(m[1], m[2], m[3], m[0].trim());
+  const b = side(m[4], m[5], m[6], m[0].split(/-|–|—|to|until|till/i).pop().trim());
+  if (!a || !b) return null;
+  const explicit = (s) => (s.is24 ? s.hour % 24 : s.meridiem === 'p' ? (s.hour % 12) + 12 : s.meridiem === 'a' ? s.hour % 12 : null);
+  let start = explicit(a);
+  let end = explicit(b);
+  const dur = (s, e) => ((e * 60 + b.minute) - (s * 60 + a.minute) + 1440) % 1440;
+  if (start === null && end === null) {
+    start = a.hour >= 1 && a.hour <= 5 ? a.hour + 12 : a.hour % 12 === 0 ? 12 : a.hour;
+  } else if (start === null) {
+    const options = [a.hour % 12, (a.hour % 12) + 12];
+    start = options.find((s) => dur(s, end) >= 60 && dur(s, end) <= 14 * 60) ?? options[1];
+  }
+  if (end === null) {
+    const options = [b.hour % 12, (b.hour % 12) + 12];
+    end = options.map((e) => [e, dur(start, e)]).filter(([, d]) => d >= 30).sort((x, y) => x[1] - y[1])[0]?.[0] ?? options[1];
+  }
+  return { start: hm(start, a.minute), end: hm(end, b.minute) };
+}
+
+const nameTokens = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z\s.]/g, ' ').replace(/\./g, ' ').split(/\s+/).filter(Boolean);
+
+// Does a name printed on a schedule belong to the user? `aliases` are the user's names
+// ("Arnab", "Arnab Das", "A. Das"). Every token of an alias must appear in the printed
+// name; a single printed initial counts for a first/middle name when the alias has a
+// surname too ("A. Das" matches "Arnab Das"). Look-alikes ("Arnav") never match.
+export function personMatches(printed, aliases) {
+  const p = nameTokens(printed);
+  if (!p.length) return false;
+  return (aliases || []).some((alias) => {
+    const a = nameTokens(alias);
+    if (!a.length) return false;
+    let full = 0;
+    const ok = a.every((t) => {
+      if (p.includes(t)) { if (t.length > 1) full++; return true; }
+      return a.length > 1 && p.some((x) => x.length === 1 && x === t[0]);
+    });
+    return ok && full > 0;
+  });
+}

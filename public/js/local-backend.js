@@ -2,8 +2,9 @@
 // Emulates the /api routes: data lives in this browser's IndexedDB, uploads become
 // data URLs, and AI parsing calls the Anthropic API directly with a key the user
 // pastes into Settings (kept in this browser's localStorage).
-import { createSeed } from './seed.js';
-import { AIError, DEFAULT_MODEL, extract, fileBlock, receiptRequest, scheduleRequest, paystubRequest } from './ai-core.js';
+import { createSeed, migrate } from './seed.js';
+import { AIError, DEFAULT_MODEL, extract, fileBlock, receiptRequest, scheduleRequest, paystubRequest, mergeScheduleReads } from './ai-core.js';
+import { personMatches } from './parse.js';
 
 const DB_NAME = 'finance-manager';
 const STORE = 'kv';
@@ -38,6 +39,7 @@ async function state() {
   cache = await getAll();
   if (!cache) { cache = createSeed(); await putAll(cache); }
   const seed = createSeed();
+  migrate(cache);
   for (const k of Object.keys(seed)) if (cache[k] === undefined) cache[k] = seed[k];
   return cache;
 }
@@ -74,9 +76,14 @@ async function runAI(kind, body) {
   const s = await state();
   const blocks = blocksFrom(body.files);
   const request = kind === 'receipt' ? receiptRequest({ blocks, categories: s.categories, today: todayIso() })
-    : kind === 'schedule' ? scheduleRequest({ blocks, person: body.person || s.settings.schedulePerson, today: todayIso() })
+    : kind === 'schedule' ? scheduleRequest({ blocks, today: todayIso() })
       : paystubRequest({ blocks, today: todayIso() });
-  return extract({ ...(await anthropic()), model: getModel(), ...request });
+  const result = await extract({ ...(await anthropic()), model: getModel(), ...request });
+  if (kind !== 'schedule') return result;
+  const merged = mergeScheduleReads([result]);
+  const solo = merged.people.length <= 1;
+  for (const sh of merged.shifts) sh.mine = solo || !sh.person || personMatches(sh.person, body.aliases || []);
+  return merged;
 }
 
 const readAsDataURL = (file) => new Promise((resolve, reject) => {
@@ -107,6 +114,7 @@ export async function handle(path, { method = 'GET', body } = {}) {
   if (p === 'files') return { ok: true }; // images live inside the receipt records
   if (p === 'restore') {
     if (!body?.settings || !Array.isArray(body.categories)) throw Object.assign(new Error('Not a valid backup file'), { status: 400 });
+    migrate(body);
     const seed = createSeed();
     cache = { version: seed.version };
     for (const k of Object.keys(seed)) cache[k] = body[k] ?? seed[k];
