@@ -224,6 +224,24 @@ export function suggestPlan(s, plannedIncome) {
   return plan;
 }
 
+// Split money across the categories that aren't already linked (bills, sinking funds, debt
+// and investment contributions keep their linked amounts). Only what's left after the linked
+// lines is shared out, using the allocation targets, so the plan never exceeds the money.
+export function autoPlan(s, x, funds) {
+  const m = monthSummary(s, x);
+  const kept = sum(m.rows.filter((r) => r.link), (r) => r.link.value);
+  const free = m.rows.filter((r) => !r.link);
+  const base = suggestPlan(s, funds);
+  const total = sum(free, (r) => base[r.id] || 0);
+  const room = Math.max(0, funds - kept);
+  const plan = {};
+  for (const r of free) plan[r.id] = total ? round2(((base[r.id] || 0) * room) / total) : 0;
+  const drift = round2(room - sum(Object.values(plan)));
+  const biggest = free.reduce((a, r) => ((plan[r.id] || 0) > (plan[a?.id] || 0) ? r : a), null);
+  if (biggest && total && drift) plan[biggest.id] = round2(plan[biggest.id] + drift);
+  return plan;
+}
+
 /* ======================================================================
    Net worth & emergency fund
    ====================================================================== */
@@ -958,4 +976,30 @@ export function payTimeline(s, asOf = today(), { count = 2, horizonDays = 120 } 
     .filter((pc) => pc.shifts.length || pc.salary)
     .map((pc) => ({ payday: pc.payday, job: pc.job, amount: round2(pc.net), hours: pc.hours, shifts: pc.shifts.map((x) => ({ ...x, done: x.date < asOf })), workFrom: pc.start, workTo: pc.end }));
   return { now, nextPayday: firstPayday, pays, later };
+}
+
+/* ======================================================================
+   Money map (Overview): money in at the centre, pots around it
+   ====================================================================== */
+const INVEST_IDS = ['retirement', 'investing'];
+const DEBT_IDS = ['min_debt', 'extra_debt'];
+export const POTS = [
+  { id: 'needs', label: 'Bills & essentials', hint: 'Rent, utilities, phone, groceries, gas, insurance', match: (c) => c.type === 'need' && !DEBT_IDS.includes(c.id) },
+  { id: 'wants', label: 'Fun & lifestyle', hint: 'Eating out, shopping, streaming, hobbies', match: (c) => c.type === 'want' },
+  { id: 'savings', label: 'Savings', hint: 'Emergency fund and sinking funds', match: (c) => c.type === 'savings' && !INVEST_IDS.includes(c.id) && !DEBT_IDS.includes(c.id) },
+  { id: 'investing', label: 'Investing', hint: 'Retirement and other investments', match: (c) => INVEST_IDS.includes(c.id) },
+  { id: 'debt', label: 'Debt payoff', hint: 'Minimum and extra debt payments', match: (c) => DEBT_IDS.includes(c.id) },
+];
+
+// Money in = for each income source, whichever is larger: what's planned or what arrived.
+// Each pot's allocation is the sum of its categories' planned amounts for the period.
+export function moneyMap(s, x) {
+  const m = monthSummary(s, x);
+  const funds = round2(sum(m.income, (i) => Math.max(i.planned, i.actual)));
+  const pots = POTS.map((p) => {
+    const rows = m.rows.filter((r) => p.match(r));
+    return { ...p, rows, planned: round2(sum(rows, (r) => r.planned)), spent: round2(sum(rows, (r) => r.actual)) };
+  });
+  const assigned = round2(sum(pots, (p) => p.planned));
+  return { summary: m, funds, pots, assigned, unassigned: round2(funds - assigned), uncategorized: round2(sum(m.uncategorized, (t) => t.amount)) };
 }

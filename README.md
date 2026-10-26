@@ -52,6 +52,19 @@ Paid every two weeks? Home looks forward from today:
 
 Budgets run one paycheck at a time (payday to the day before the next payday). **Plan this paycheck →** on any upcoming pay opens its budget. Settings → **Plan my money by** switches to weekly, twice-a-month, or calendar months.
 
+## Overview: your money map
+
+**Home → Overview** shows the selected paycheck as a picture:
+
+- **The centre circle is money in.** **+ Add money** puts more there, either money you already have (recorded as income) or money you're expecting this period.
+- **Five circles around it are where it goes:** Bills & essentials, Fun & lifestyle, Savings, Investing and Debt payoff. A circle grows with the money you give it, and its outer ring fills as you spend.
+- **Tap a circle** to set amounts for its categories. **+ rest** gives one of them everything still unassigned.
+- **Auto-split** shares out what's left after bills, savings and debt payments using your 50/30/20 (or other) targets.
+- The centre always shows what's still unassigned, or tells you when you've assigned more than you have.
+- **This paycheck / Next pay** switches between the two.
+
+It uses the same per-paycheck plan as the Budget page, so the two always match.
+
 ## What's inside
 
 The sidebar has eight sections. Related pages sit as tabs at the top of each one, and **+ Add** (top right) scans a receipt, uploads a schedule, or adds a transaction from any page.

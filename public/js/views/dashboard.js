@@ -5,7 +5,7 @@ import { state, update } from '../store.js';
 import { esc, money, fmtDate, today, options, toast, on, $ } from '../util.js';
 import {
   safeToSpend, moneyFlow, netWorth, emergencyFund, highInterestDebt, healthScore,
-  investmentSummary, planMode, planAnchor, PLAN_FREQUENCIES, suggestPlan, BUCKETS, payTimeline,
+  investmentSummary, planMode, planAnchor, PLAN_FREQUENCIES, autoPlan, BUCKETS, payTimeline,
 } from '../calc.js';
 import { markBillPaid } from './bills.js';
 import { payCardsHtml, laterHtml, bindTimeline } from './pay-timeline.js';
@@ -127,9 +127,8 @@ export async function render(el, ctx) {
   on(el, 'click', '[data-action=monthly]', () => { update('settings', (s) => { s.planning = { ...(s.planning || {}), mode: 'month' }; }); ctx.refresh(); });
   on(el, 'click', '[data-pay]', (e, b) => { markBillPaid(state.bills.find((x) => x.id === b.dataset.pay)); ctx.refresh(); });
   on(el, 'click', '[data-action=quick-plan]', () => {
-    const suggested = suggestPlan(state, st.income);
-    for (const row of m.rows) if (row.link) delete suggested[row.id]; // keep bills/savings/debt lines linked
-    update('budgets', (b) => { b[r.key] = { income: { ...(b[r.key]?.income || {}) }, planned: suggested, notes: b[r.key]?.notes || {} }; });
+    const planned = autoPlan(state, r, st.income);
+    update('budgets', (b) => { b[r.key] = { income: { ...(b[r.key]?.income || {}) }, planned, notes: b[r.key]?.notes || {} }; });
     toast(`Plan made for ${r.label} — adjust it any time in Budget`);
     ctx.refresh();
   });

@@ -441,3 +441,45 @@ test('pay timeline looks forward: next pay, the one after, and later shifts', as
   // On payday itself, that pay is "next".
   assert.equal(payTimeline(s, '2026-10-30').pays[0].payday, '2026-10-30');
 });
+
+test('money map: money in at the centre, pots sum their categories, unassigned is the rest', async () => {
+  const { moneyMap, periodFor } = await import('../public/js/calc.js');
+  const s = createSeed();
+  s.sinkingFunds = []; s.debts = []; s.investing.accounts = [];
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '2026-10-16' };
+  const r = periodFor(s, '2026-10-20');
+  s.transactions = [
+    { id: 'p', type: 'income', date: '2026-10-16', amount: 1000, sourceId: 'side' },
+    { id: 'tips', type: 'income', date: '2026-10-18', amount: 60, sourceId: 'other_income' },
+    { id: 'g', type: 'expense', date: '2026-10-19', amount: 45, categoryId: 'groceries' },
+  ];
+  s.budgets[r.key] = { income: { side: 900 }, planned: { groceries: 200, dining: 50, emergency_fund: 100, retirement: 80, extra_debt: 70 }, notes: {} };
+  const map = moneyMap(s, r);
+  assert.equal(map.funds, 1060); // side: max(900 planned, 1000 received) + 60 tips
+  const pot = (id) => map.pots.find((p) => p.id === id);
+  assert.deepEqual([pot('needs').planned, pot('needs').spent], [200, 45]);
+  assert.equal(pot('wants').planned, 50);
+  assert.equal(pot('savings').planned, 100);
+  assert.equal(pot('investing').planned, 80);
+  assert.equal(pot('debt').planned, 70);
+  assert.equal(map.assigned, 500);
+  assert.equal(map.unassigned, 560);
+});
+
+test('auto-split shares only what is left after linked bills, savings and debt', async () => {
+  const { autoPlan, moneyMap, periodFor } = await import('../public/js/calc.js');
+  const s = createSeed();
+  s.investing.accounts = []; s.debts = [];
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '2026-10-16' };
+  const r = periodFor(s, '2026-10-20');
+  s.bills = [{ id: 'rent', name: 'Rent', amount: 600, categoryId: 'housing', frequency: 'monthly', nextDue: '2026-10-20' }];
+  s.transactions = [{ id: 'p', type: 'income', date: '2026-10-16', amount: 1500, sourceId: 'side' }];
+  const map0 = moneyMap(s, r);
+  const linked = map0.assigned; // rent + this paycheck's share of sinking funds
+  s.budgets[r.key] = { income: {}, planned: autoPlan(s, r, 1500), notes: {} };
+  const map = moneyMap(s, r);
+  assert.equal(map.funds, 1500);
+  assert.ok(Math.abs(map.unassigned) < 0.02, `unassigned ${map.unassigned}`);
+  assert.equal(map.pots.find((p) => p.id === 'needs').rows.find((x) => x.id === 'housing').planned, 600); // rent stays linked
+  assert.ok(linked > 600);
+});

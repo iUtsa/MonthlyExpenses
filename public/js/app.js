@@ -6,7 +6,7 @@ import { runAutomations } from './automation.js';
 
 // Sidebar sections; pages inside a section show as tabs under the title.
 const HUBS = [
-  { id: 'home', label: 'Home', icon: '◉', pages: [['dashboard', 'Home']] },
+  { id: 'home', label: 'Home', icon: '◉', pages: [['dashboard', 'Home'], ['overview', 'Overview']] },
   { id: 'spending', label: 'Spending', icon: '⇄', pages: [['transactions', 'Transactions'], ['receipts', 'Scan receipts']] },
   { id: 'income', label: 'Income & shifts', icon: '⏱', pages: [['income', 'Income & shifts']] },
   { id: 'budget', label: 'Budget & bills', icon: '▤', pages: [['budget', 'Budget'], ['bills', 'Bills & cash flow']] },

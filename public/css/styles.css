@@ -170,6 +170,31 @@ small, .small { font-size: 12px; }
 .half { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .half.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
+/* ---------- Money map ---------- */
+.money-map { width: 100%; height: auto; display: block; }
+.money-map text { fill: var(--text); font-family: var(--font); }
+.money-map .pot-amount { font-size: 20px; font-weight: 700; }
+.money-map .pot-sub { font-size: 13px; fill: var(--text-2); }
+.money-map .pot-label { font-size: 16px; font-weight: 600; }
+.money-map .center-amount { font-size: 30px; font-weight: 700; }
+.money-map .center-btn { font-size: 13px; font-weight: 600; fill: var(--accent-ink); }
+.money-map .neg-fill { fill: var(--critical-ink); }
+.money-map .pot, .money-map .center { cursor: pointer; outline: none; }
+.money-map .pot:hover .pot-body, .money-map .pot:focus-visible .pot-body { fill-opacity: 0.3; }
+.money-map .center:hover circle, .money-map .center:focus-visible circle { fill-opacity: 0.18; }
+.alloc-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.alloc-row:last-child { border-bottom: 0; }
+.alloc-row .grow { flex: 1; min-width: 0; }
+.alloc-row input { width: 90px; }
+.pot-tile { text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.pot-tile.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+@media (max-width: 860px) {
+  .money-map .pot-amount { font-size: 26px; }
+  .money-map .pot-label { font-size: 22px; }
+  .money-map .pot-sub { font-size: 17px; }
+  .money-map .center-amount { font-size: 36px; }
+}
+
 /* ---------- Pay timeline ---------- */
 .pay-card.next { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
 .pay-covers { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); }
@@ -261,6 +286,7 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid.cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .grid .span-2 { grid-column: span 2; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; min-width: 0; }
@@ -389,7 +415,7 @@ tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 12p
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
-  .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.cols-4, .grid.cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
@@ -400,7 +426,7 @@ tr.group-row td { background: var(--surface-2); font-weight: 600; font-size: 12p
   .topbar { padding: 10px 16px; flex-wrap: wrap; }
   .topbar h1 { font-size: 18px; }
   .view { padding: 16px; }
-  .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
+  .grid.cols-2, .grid.cols-3, .grid.cols-4, .grid.cols-5 { grid-template-columns: minmax(0, 1fr); }
   .grid .span-2 { grid-column: auto; }
   .form-grid .span-2 { grid-column: auto; }
   .subnav { padding: 0 12px; }
