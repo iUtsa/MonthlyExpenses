@@ -44,7 +44,7 @@ export async function render(el, ctx) {
 /* ====================== Overview ====================== */
 function overview(el, ctx) {
   const e = earningsForMonth(state, ctx.range);
-  const word = ctx.range.kind === 'period' ? 'this paycheck' : 'this month';
+  const word = `this ${ctx.range.word}`;
   const upcoming = paychecks(state, { from: today(), to: addDays(today(), 45) });
   const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
 
@@ -182,7 +182,7 @@ function shiftsTab(el, ctx) {
         </label>`}
       </div>
       <div class="card">
-        <h2>${range.kind === 'period' ? 'This paycheck' : esc(range.label)}</h2><p class="small muted">${esc(range.label)}</p>
+        <h2>This ${range.word}</h2><p class="small muted">${esc(range.label)}</p>
         <div class="kv" style="margin-top:10px">
           <span>Shifts</span><span>${computed.length}</span>
           <span>Hours</span><span>${num(sum(computed, (s) => s.hours), 1)}</span>

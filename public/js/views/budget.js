@@ -28,7 +28,7 @@ export async function render(el, ctx) {
   const month = range.key; // budget key: 'P<payday>' for a paycheck, 'YYYY-MM' for a month
   const m = monthSummary(state, range);
   const notes = state.budgets[month]?.notes || {};
-  const word = range.kind === 'period' ? 'paycheck' : 'month';
+  const word = range.word;
   const rta = m.remainingToAssign;
   const prevRange = shiftRange(state, range, -1);
   const prev = prevRange.key;
@@ -60,7 +60,7 @@ export async function render(el, ctx) {
 
     <div class="card" style="margin-top:16px">
       <div class="row">
-        <strong>${range.kind === 'period' ? `Paycheck ${esc(range.label)}` : esc(range.label)}</strong><span class="spacer"></span>
+        <strong>${esc(range.title)}</strong><span class="spacer"></span>
         <button class="btn small" data-action="copy">Copy plan from last ${word}</button>
         <button class="btn small" data-action="autofill">Auto-fill from ${esc(m.targets.rule)} targets</button>
         <button class="btn small danger" data-action="clear">Clear plan</button>

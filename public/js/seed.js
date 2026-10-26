@@ -222,7 +222,12 @@ export function migrate(data) {
   data.settings ||= {};
   data.settings.scheduleAliases ||= [];
   // Plan paycheck by paycheck (every 2 weeks) unless the user chooses calendar months.
-  data.settings.planning ||= { mode: 'paycheck', frequency: 'biweekly', payday: '' };
+  data.settings.planning ||= { mode: 'twopay', frequency: 'biweekly', payday: '' };
+  // v2: plan two paychecks at a time by default (unless calendar months were chosen).
+  if (!data.settings.planning.v) {
+    if (data.settings.planning.mode !== 'month') data.settings.planning.mode = 'twopay';
+    data.settings.planning.v = 2;
+  }
   // Taxes and overtime are manual: jobs without a tax setting take nothing out, and no job
   // calculates overtime unless it opts in.
   for (const job of data.jobs || []) {

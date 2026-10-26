@@ -157,7 +157,7 @@ export async function render(el, ctx) {
         ${ctx.ai.enabled ? '' : `<div class="alert info" style="margin-top:12px"><span class="alert-icon">i</span><div class="small">Without an API key, receipts are read with on-device OCR (Tesseract) and keyword rules. It works best on clear, flat, well-lit photos. ${ctx.ai.mode === 'browser' ? 'Add your Anthropic API key in <a href="#/settings">Settings</a>' : 'Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code>'} for accurate line items and categories.</div></div>`}
       </div>
       <div class="card">
-        <h2>${ctx.range.kind === 'period' ? 'This paycheck' : 'This month'}</h2>
+        <h2>This ${ctx.range.word}</h2>
         <div class="kv" style="margin-top:10px">
           <span>Receipts scanned</span><span>${monthReceipts.length}</span>
           <span>Total</span><span>${money(sum(monthReceipts, (r) => r.computedTotal ?? r.total))}</span>

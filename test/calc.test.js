@@ -411,3 +411,33 @@ test('paycheck budget: bills on their due dates, monthly amounts split, safe to 
   assert.equal(flow.totalIn, 1500);
   assert.deepEqual(flow.outgoing.map((g) => [g.name.split(' ')[0], g.total]), [['Groceries', 80], ['Internet', 50]]);
 });
+
+test('two-paycheck plans cover two paydays (about a month) and split bills by paycheck', async () => {
+  const { periodFor, shiftRange, monthSummary, safeToSpend, planMode } = await import('../public/js/calc.js');
+  const s = createSeed();
+  s.settings.planning = { mode: 'twopay', frequency: 'biweekly', payday: '2026-10-16', blockStart: '2026-10-16' };
+  assert.equal(planMode(s), 'twopay');
+  const r = periodFor(s, '2026-10-25');
+  assert.deepEqual([r.from, r.to, r.days, r.key, r.word], ['2026-10-16', '2026-11-12', 28, 'B2026-10-16', 'plan']);
+  assert.deepEqual(r.paydays, ['2026-10-16', '2026-10-30']);
+  assert.deepEqual(r.halves, [{ from: '2026-10-16', to: '2026-10-29' }, { from: '2026-10-30', to: '2026-11-12' }]);
+  assert.equal(periodFor(s, '2026-11-12').from, '2026-10-16');
+  assert.equal(periodFor(s, '2026-11-13').from, '2026-11-13');
+  assert.equal(shiftRange(s, r, 1).from, '2026-11-13');
+  assert.equal(shiftRange(s, r, -1).from, '2026-09-18');
+  // Rent on Nov 1 falls in this plan (paid from paycheck 2).
+  s.sinkingFunds = []; s.debts = []; s.investing.accounts = [];
+  s.bills = [{ id: 'rent', name: 'Rent', amount: 1200, categoryId: 'housing', frequency: 'monthly', nextDue: '2026-11-01' }];
+  assert.equal(monthSummary(s, r).rows.find((x) => x.id === 'housing').planned, 1200);
+  assert.equal(safeToSpend(s, r, '2026-10-25').bills[0].date, '2026-11-01');
+  // Twice-a-month pay: each plan runs from the 15th to the 14th and includes the 15th and the last day.
+  s.settings.planning = { mode: 'twopay', frequency: 'semimonthly' };
+  const sm = periodFor(s, '2026-10-20');
+  assert.deepEqual([sm.from, sm.to, ...sm.paydays], ['2026-10-15', '2026-11-14', '2026-10-15', '2026-10-31']);
+  // Older saved settings switch to two-paycheck plans; an explicit monthly choice is kept.
+  const { migrate } = await import('../public/js/seed.js');
+  const a = createSeed(); a.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '' }; migrate(a);
+  assert.equal(a.settings.planning.mode, 'twopay');
+  const b = createSeed(); b.settings.planning = { mode: 'month' }; migrate(b);
+  assert.equal(b.settings.planning.mode, 'month');
+});

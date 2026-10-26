@@ -7,15 +7,15 @@ import { exportWorkbook } from '../exporter.js';
 let span = 0; // index into the span choices for the current planning mode
 
 export async function render(el, ctx) {
-  const byPaycheck = ctx.range.kind === 'period';
-  const choices = byPaycheck ? [[6, '6 paychecks'], [13, '6 months'], [26, '1 year']] : [[3, '3 months'], [6, '6 months'], [12, '12 months']];
+  const byPaycheck = ctx.range.word === 'paycheck';
+  const choices = byPaycheck ? [[6, '6 paychecks'], [13, '6 months'], [26, '1 year']] : [[3, '3 months'], [6, '6 months'], [13, '1 year']];
   const range = choices[Math.min(span, 2)][0];
   const months = rangesBack(state, ctx.range, range);
   const sums = months.map((m) => monthSummary(state, m));
   const from = months[0].from;
   const to = ctx.range.to;
   const tx = state.transactions.filter((t) => t.date >= from && t.date <= to);
-  const unit = byPaycheck ? 'paycheck' : 'mo';
+  const unit = byPaycheck ? 'paycheck' : ctx.range.word === 'plan' ? 'plan' : 'mo';
   const short = (r) => (r.kind === 'period' ? fmtDate(r.from) : monthLabel(r.key, 'short'));
   const expenses = tx.filter((t) => t.type === 'expense');
   const totalIncome = sum(sums, (s) => s.actualIncome);

@@ -3,7 +3,8 @@ import { download } from '../util.js';
 import {
   esc, pct, uid, on, $, options, toast, confirmDialog, modal, today, addDays, shiftMonth, round2, monthsRange,
 } from '../util.js';
-import { RULES, incomeBracket, targets, PLAN_FREQUENCIES, planAnchor } from '../calc.js';
+import { RULES, incomeBracket, targets, PLAN_FREQUENCIES, PLAN_MODES, planAnchor, planMode, periodFor } from '../calc.js';
+import { fmtDate } from '../util.js';
 import { exportWorkbook, importPlannerWorkbook } from '../exporter.js';
 
 const RULE_OPTIONS = [
@@ -45,17 +46,20 @@ export async function render(el, ctx) {
       </div>
     </div>` : '';
 
-  const plan = s.planning || { mode: 'paycheck', frequency: 'biweekly', payday: '' };
+  const plan = s.planning || { mode: 'twopay', frequency: 'biweekly', payday: '' };
+  const block = planMode(state) === 'twopay' && plan.frequency !== 'semimonthly' ? periodFor(state, today()) : null;
   const planningCard = `
     <div class="card" style="margin-bottom:16px">
       <div class="card-head"><div><h2>Plan my money by</h2><p>Everything — Home, budget, bills, reports — follows this.</p></div></div>
       <div class="form-grid">
-        <label class="field">Plan by<select data-plan="mode">${options([{ id: 'paycheck', name: 'Each paycheck (payday to payday)' }, { id: 'month', name: 'Calendar month' }], plan.mode)}</select></label>
+        <label class="field">Plan by<select data-plan="mode">${options(PLAN_MODES, plan.mode)}</select></label>
         ${plan.mode === 'month' ? '' : `
         <label class="field">I get paid<select data-plan="frequency">${options(PLAN_FREQUENCIES, plan.frequency)}</select></label>
         ${plan.frequency === 'semimonthly' ? '' : `<label class="field">A payday (any past or upcoming one)<input type="date" data-plan="payday" value="${esc(plan.payday || planAnchor(state) || '')}"></label>`}`}
       </div>
       ${plan.mode !== 'month' && plan.frequency !== 'semimonthly' && !plan.payday && planAnchor(state) ? '<p class="small muted" style="margin-top:8px">Using the paydays from your job. Set a date here to override.</p>' : ''}
+      ${block ? `<div class="row" style="margin-top:10px"><span class="small text-2">Right now your plan covers the paychecks on <strong>${fmtDate(block.paydays[0])}</strong> and <strong>${fmtDate(block.paydays[1])}</strong>.</span>
+        <button class="btn small" data-action="shift-block">Start plans with the ${fmtDate(block.paydays[1])} paycheck instead</button></div>` : ''}
     </div>`;
 
   el.innerHTML = `${account}${planningCard}
@@ -180,7 +184,13 @@ export async function render(el, ctx) {
     if (ok) { location.hash = ''; location.reload(); }
   });
   on(el, 'change', '[data-plan]', (e, inp) => {
-    update('settings', (x) => { x.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '', ...(x.planning || {}), [inp.dataset.plan]: inp.value }; });
+    // Changing how or when you're paid re-lines-up two-paycheck plans with the new paydays.
+    update('settings', (x) => { x.planning = { mode: 'twopay', frequency: 'biweekly', payday: '', ...(x.planning || {}), [inp.dataset.plan]: inp.value, blockStart: '' }; });
+    ctx.refresh();
+  });
+  on(el, 'click', '[data-action=shift-block]', () => {
+    update('settings', (x) => { x.planning = { ...x.planning, blockStart: block.paydays[1] }; });
+    toast(`Plans now start with the ${fmtDate(block.paydays[1])} paycheck`);
     ctx.refresh();
   });
   on(el, 'change', '[data-names]', (e, inp) => {

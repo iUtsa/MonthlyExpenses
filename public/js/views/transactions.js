@@ -100,7 +100,7 @@ export async function render(el, ctx) {
       <div class="card">
         <div class="row">
           <input type="search" placeholder="Search merchant, note, amount…" value="${esc(filters.q)}" data-f="q" data-key="tx-search" style="flex:1;min-width:200px">
-          <select data-f="scope">${options([{ id: 'period', name: ctx.range.kind === 'period' ? `This paycheck (${ctx.range.label})` : ctx.range.label }, { id: 'all', name: 'All time' }], filters.scope)}</select>
+          <select data-f="scope">${options([{ id: 'period', name: ctx.range.kind === 'period' ? `This ${ctx.range.word} (${ctx.range.label})` : ctx.range.label }, { id: 'all', name: 'All time' }], filters.scope)}</select>
           <select data-f="type">${options([{ id: '', name: 'All types' }, { id: 'expense', name: 'Expenses' }, { id: 'income', name: 'Income' }, { id: 'transfer', name: 'Transfers' }], filters.type)}</select>
           <select data-f="category">${catOptions}</select>
           <select data-f="source">${options([{ id: '', name: 'Any source' }, { id: 'manual', name: 'Manual' }, { id: 'receipt', name: 'Receipts' }, { id: 'import', name: 'Imported' }, { id: 'paycheck', name: 'Paychecks' }, { id: 'bill', name: 'Bills' }], filters.source)}</select>

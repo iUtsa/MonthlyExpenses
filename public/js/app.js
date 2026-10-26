@@ -1,6 +1,7 @@
 import { state, loadState, api, backendMode } from './store.js';
 import { $, esc, today, toast, on } from './util.js';
-import { periodFor, shiftRange } from './calc.js';
+import { periodFor, shiftRange, defaultBlockStart } from './calc.js';
+import { update } from './store.js';
 import { destroyCharts } from './charts.js';
 import { runAutomations } from './automation.js';
 
@@ -51,12 +52,18 @@ function setDate(date) {
 // The period shown everywhere follows Settings → "Plan my budget by" (each paycheck by default).
 function updatePeriod() {
   if (!state.settings) return;
+  // First visit in two-paycheck mode: the plan starts with the paycheck you're on now.
+  const p = state.settings.planning || {};
+  if (!p.blockStart) {
+    const start = defaultBlockStart(state);
+    if (start) update('settings', (s) => { s.planning = { ...s.planning, blockStart: start }; }, { silent: true });
+  }
   ctx.range = periodFor(state, ctx.date);
   const r = ctx.range;
   const t = today();
   ctx.month = r.kind === 'month' ? r.key : (t >= r.from && t <= r.to ? t : r.from).slice(0, 7);
   const current = t >= r.from && t <= r.to;
-  $('#periodLabel').innerHTML = r.kind === 'period' ? `<span class="muted">Paycheck · </span>${esc(r.label)}` : esc(r.label);
+  $('#periodLabel').innerHTML = r.kind === 'period' ? `<span class="muted">${r.paydays.length > 1 ? '2 paychecks' : 'Paycheck'} · </span>${esc(r.label)}` : esc(r.label);
   $('#dateInput').value = ctx.date;
   let todayBtn = $('#todayBtn');
   if (!current && !todayBtn) {

@@ -41,11 +41,14 @@ Nothing is estimated behind your back:
 - **Overtime:** you enter overtime hours per shift. Automatic "after X hours per week" overtime is an opt-in setting on the job.
 - The Tax calculator tab is a planning tool only; it never changes paychecks.
 
-## Planned paycheck by paycheck
+## Planned two paychecks at a time
 
-Paid every two weeks? Everything runs on pay periods. Each period goes from a payday to the day before the next one, so you plan with the money you actually have.
+Paid every two weeks? By default each plan covers **your next two paychecks**, which is about a month, but lined up with your real paydays (e.g. Oct 16 + Oct 30, through Nov 12).
 
-- **‹ Paycheck · Oct 16 – Oct 29 ›** at the top steps from paycheck to paycheck, and **Today** jumps back.
+- Home shows **Paycheck 1** and **Paycheck 2** side by side: what each pays you, which bills it has to cover before the next payday, and what's left. It warns you when one paycheck can't cover its bills, so you know how much to hold back from the other.
+- Settings → **Plan my money by** can also plan one paycheck at a time or by calendar month, and "Start plans with the … paycheck instead" pairs your paychecks the other way.
+
+- **‹ 2 paychecks · Oct 16 – Nov 12 ›** at the top steps from plan to plan, and **Today** jumps back.
 - **Home** answers the everyday questions:
   - how much is safe to spend until the next payday (and per day)
   - this paycheck's pay

@@ -45,7 +45,7 @@ function save(month, fn) {
 export async function render(el, ctx) {
   const range = ctx.range;
   const month = range.key; // review per paycheck (or per month in month mode)
-  const word = range.kind === 'period' ? 'paycheck' : 'month';
+  const word = range.word;
   const r = review(month);
   const ins = insights(state, range);
   const done = Object.values(r.checked).filter(Boolean).length;
@@ -57,7 +57,7 @@ export async function render(el, ctx) {
     <div class="grid cols-3" style="margin-top:16px">
       <div class="stack span-2">
         <div class="card">
-          <div class="card-head"><div><h2>${range.kind === 'period' ? `Paycheck ${esc(range.label)}` : esc(range.label)} review</h2><p>${done} of ${TOTAL} steps done${r.reviewDate ? ` · last opened ${fmtDate(r.reviewDate)}` : ''}</p></div>
+          <div class="card-head"><div><h2>${esc(range.title)} review</h2><p>${done} of ${TOTAL} steps done${r.reviewDate ? ` · last opened ${fmtDate(r.reviewDate)}` : ''}</p></div>
             <div class="meter ${done === TOTAL ? 'good' : ''}" style="width:160px"><span style="width:${(done / TOTAL) * 100}%"></span></div></div>
           ${CHECKLIST.map(([section, items], si) => `<h3 style="margin:14px 0 6px">${esc(section)}</h3>
             ${items.map(([label, link], i) => {

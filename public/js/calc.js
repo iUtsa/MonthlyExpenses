@@ -17,13 +17,25 @@ export const PLAN_FREQUENCIES = [
 ];
 const pad2 = (n) => String(n).padStart(2, '0');
 
+// Every range carries `word` ('month' | 'paycheck' | 'plan') and `title` for display.
 export function monthRange(month) {
   const days = daysInMonth(month);
-  return { kind: 'month', key: month, from: `${month}-01`, to: `${month}-${pad2(days)}`, payday: null, nextPayday: null, days, label: monthLabel(month) };
+  return { kind: 'month', key: month, from: `${month}-01`, to: `${month}-${pad2(days)}`, payday: null, nextPayday: null, paydays: [], halves: [], days, label: monthLabel(month), word: 'month', title: monthLabel(month) };
 }
 
 function payRange(from, to) {
-  return { kind: 'period', key: `P${from}`, from, to, payday: from, nextPayday: addDays(to, 1), days: daysBetween(from, to) + 1, label: `${fmtDate(from)} – ${fmtDate(to)}` };
+  const label = `${fmtDate(from)} – ${fmtDate(to)}`;
+  return { kind: 'period', key: `P${from}`, from, to, payday: from, nextPayday: addDays(to, 1), paydays: [from], halves: [{ from, to }], days: daysBetween(from, to) + 1, label, word: 'paycheck', title: `Paycheck · ${label}` };
+}
+
+// Two paychecks at a time: about a month, lined up with real paydays. `halves` are the two pay
+// periods inside it (bills in each half are covered by that half's paycheck).
+function twoPayRange(from, mid, to) {
+  const label = `${fmtDate(from)} – ${fmtDate(to)}`;
+  return {
+    kind: 'period', key: `B${from}`, from, to, payday: from, nextPayday: addDays(to, 1), paydays: [from, mid],
+    halves: [{ from, to: addDays(mid, -1) }, { from: mid, to }], days: daysBetween(from, to) + 1, label, word: 'plan', title: `2 paychecks · ${label}`,
+  };
 }
 
 // A known payday: the one set in Settings, else the next payday of your first job.
@@ -34,15 +46,52 @@ export function planAnchor(s) {
   return job ? payPeriod(job, today()).payday : null;
 }
 
+export const PLAN_MODES = [
+  { id: 'twopay', name: 'Two paychecks at a time (about a month)' },
+  { id: 'paycheck', name: 'Each paycheck' },
+  { id: 'month', name: 'Calendar month' },
+];
+// 'twopay' | 'paycheck' | 'month' — falls back to months until a payday is known.
 export const planMode = (s) => {
   const p = s.settings.planning || {};
   if (p.mode === 'month') return 'month';
-  return (p.frequency === 'semimonthly' || planAnchor(s)) ? 'paycheck' : 'month';
+  if (!(p.frequency === 'semimonthly' || planAnchor(s))) return 'month';
+  return p.mode === 'paycheck' ? 'paycheck' : 'twopay';
 };
+
+// Start of the single pay period containing `date` (used to line up two-paycheck plans).
+function singlePeriodStart(s, date) {
+  const p = s.settings.planning || {};
+  const len = p.frequency === 'weekly' ? 7 : 14;
+  const offset = ((daysBetween(planAnchor(s), date) % len) + len) % len;
+  return addDays(date, -offset);
+}
+
+// Two-paycheck plans start on the payday saved in `planning.blockStart` (set the first time,
+// so the current plan covers the paycheck you're on now and the next one).
+export function defaultBlockStart(s) {
+  if (planMode(s) !== 'twopay' || s.settings.planning?.frequency === 'semimonthly') return null;
+  return singlePeriodStart(s, today());
+}
 
 export function periodFor(s, date) {
   const p = s.settings.planning || {};
-  if (planMode(s) === 'month') return monthRange(date.slice(0, 7));
+  const mode = planMode(s);
+  if (mode === 'month') return monthRange(date.slice(0, 7));
+  if (mode === 'twopay') {
+    if (p.frequency === 'semimonthly') {
+      // Paid on the 15th and the last day: each plan runs 15th → 14th of next month.
+      const month = date.slice(0, 7);
+      const start = Number(date.slice(8)) >= 15 ? month : shiftMonth(month, -1);
+      const next = shiftMonth(start, 1);
+      return twoPayRange(`${start}-15`, `${start}-${pad2(daysInMonth(start))}`, `${next}-14`);
+    }
+    const len = p.frequency === 'weekly' ? 7 : 14;
+    const anchor = p.blockStart || singlePeriodStart(s, today());
+    const offset = ((daysBetween(anchor, date) % (2 * len)) + 2 * len) % (2 * len);
+    const from = addDays(date, -offset);
+    return twoPayRange(from, addDays(from, len), addDays(from, 2 * len - 1));
+  }
   if (p.frequency === 'semimonthly') {
     const month = date.slice(0, 7);
     const mid = `${month}-15`;
