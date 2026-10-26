@@ -1,13 +1,14 @@
-// Home: everything about the current paycheck (or month) on one screen —
-// how much is safe to spend, this paycheck, bills due before the next one,
-// the spending plan, and where money came from / went.
+// Home, looking forward from today: what's safe to spend until the next payday, the next pay
+// and the one after it (with the shifts behind each and the bills each must cover), later
+// scheduled shifts — then this paycheck's bills, spending plan, and where money came from / went.
 import { state, update } from '../store.js';
-import { esc, money, fmtDate, today, addDays, sum, options, toast, on, $ } from '../util.js';
+import { esc, money, fmtDate, today, options, toast, on, $ } from '../util.js';
 import {
-  safeToSpend, moneyFlow, paychecks, netWorth, emergencyFund, highInterestDebt, healthScore,
-  investmentSummary, computeShifts, planMode, planAnchor, PLAN_FREQUENCIES, suggestPlan, BUCKETS,
+  safeToSpend, moneyFlow, netWorth, emergencyFund, highInterestDebt, healthScore,
+  investmentSummary, planMode, planAnchor, PLAN_FREQUENCIES, suggestPlan, BUCKETS, payTimeline,
 } from '../calc.js';
 import { markBillPaid } from './bills.js';
+import { payCardsHtml, laterHtml, bindTimeline } from './pay-timeline.js';
 
 const day = (d) => fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' });
 
@@ -19,28 +20,14 @@ export async function render(el, ctx) {
   const flow = moneyFlow(state, r);
   const isPeriod = r.kind === 'period';
   const current = today() >= r.from && today() <= r.to;
-  const pcs = paychecks(state, { from: r.from, to: r.to });
-  const nextPcs = isPeriod ? paychecks(state, { from: r.nextPayday, to: addDays(r.nextPayday, 13) }) : [];
-  const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
   // Planned lines first (by bucket), then anything spent without a plan.
   const plan = m.rows.filter((row) => row.planned > 0 || row.actual > 0).sort((a, b) => (b.planned > 0) - (a.planned > 0) || BUCKETS.findIndex((x) => x.id === a.type) - BUCKETS.findIndex((x) => x.id === b.type) || b.planned - a.planned);
-  const otherIncome = flow.incoming.filter((g) => !pcs.some((p) => p.job.name === g.name));
-  const week = computeShifts(state).filter((x) => x.date >= today() && x.date <= addDays(today(), 7));
+  const tl = payTimeline(state);
   const nw = netWorth(state);
   const ef = emergencyFund(state);
   const inv = investmentSummary(state);
   const health = healthScore(state, r);
   const periodWord = r.word;
-  const twoPay = r.paydays.length > 1;
-  // Two-paycheck plans: what each paycheck has to cover before the next one arrives.
-  const halves = twoPay ? r.halves.map((h, i) => {
-    const pays = pcs.filter((p) => p.payday >= h.from && p.payday <= h.to);
-    const received = flow.incoming.flatMap((g) => g.items).filter((t) => t.date >= h.from && t.date <= h.to && !t.paycheckKey);
-    const pay = sum(pays, (p) => { const tx = recorded.get(`${p.job.id}|${p.payday}`); return tx && !tx.estimated ? tx.amount : p.net; }) + sum(received, (t) => t.amount);
-    const bills = st.bills.filter((b) => b.date >= h.from && b.date <= h.to);
-    const spent = sum(flow.outgoing.flatMap((g) => g.items).filter((t) => t.date >= h.from && t.date <= h.to && !t.billId), (t) => t.amount);
-    return { ...h, n: i + 1, pay, bills, billTotal: sum(bills, (b) => b.amount), spent, now: today() >= h.from && today() <= h.to, done: today() > h.to };
-  }) : [];
 
   el.innerHTML = `
     ${needsPayday ? `<div class="card" style="margin-bottom:16px">
@@ -52,46 +39,26 @@ export async function render(el, ctx) {
         <button class="btn ghost" type="button" data-action="monthly" style="align-self:flex-end">I'd rather plan by month</button>
       </form></div>` : ''}
 
-    <div class="grid cols-3">
-      <div class="card span-2">
-        <div class="row between"><span class="tile-label">${current ? `Safe to spend until ${twoPay ? `${day(r.to)} (both paychecks)` : isPeriod ? `payday, ${day(st.nextPayday)}` : 'the end of the month'}` : `Left over this ${periodWord}`}</span>
-          ${current && st.daysLeft ? `<span class="badge info">${st.daysLeft} day${st.daysLeft > 1 ? 's' : ''} left</span>` : ''}</div>
-        <div class="hero-value ${st.safe < 0 ? 'neg' : ''}" style="margin:6px 0">${money(st.safe, { cents: false })}</div>
-        ${current && st.daysLeft && st.safe > 0 ? `<div class="text-2">That's about <strong>${money(st.perDay, { cents: false })} a day</strong> for groceries, gas, food and everything else.</div>` : ''}
-        ${st.safe < 0 ? `<div class="alert bad" style="margin-top:8px"><span class="alert-icon">!</span><div>You're <strong>${money(-st.safe, { cents: false })} short</strong> before ${twoPay ? 'this plan ends' : isPeriod ? 'payday' : 'the month ends'}. Move money from savings, delay a set-aside, or cut spending.</div></div>` : ''}
-        <div class="kv" style="margin-top:14px;max-width:520px">
+    <div class="grid ${tl.pays.length ? 'cols-3' : ''}">
+      <div class="card">
+        <div class="row between"><span class="tile-label">${current ? (isPeriod ? `Right now · until payday ${day(st.nextPayday)}` : 'Right now · rest of the month') : `Left over · ${esc(r.title)}`}</span>
+          ${current && st.daysLeft ? `<span class="badge info">${st.daysLeft} day${st.daysLeft > 1 ? 's' : ''}</span>` : ''}</div>
+        <div class="tile-label" style="margin-top:8px">Safe to spend</div>
+        <div class="hero-value ${st.safe < 0 ? 'neg' : ''}" style="margin:2px 0 6px">${money(st.safe, { cents: false })}</div>
+        ${current && st.daysLeft && st.safe > 0 ? `<div class="text-2 small">About <strong>${money(st.perDay, { cents: false })} a day</strong> for food, gas and everything else.</div>` : ''}
+        ${st.safe < 0 ? `<div class="alert bad" style="margin-top:8px"><span class="alert-icon">!</span><div class="small"><strong>${money(-st.safe, { cents: false })} short</strong> before ${isPeriod ? 'payday' : 'the month ends'}. Use savings, delay a set-aside, or cut spending.</div></div>` : ''}
+        <div class="kv small" style="margin-top:12px">
           <span>Money in this ${periodWord}</span><span>${money(st.income)}</span>
           <span>Spent & saved so far</span><span class="neg">−${money(st.spent)}</span>
           <span>Bills still due</span><span class="neg">−${money(st.billsLeft)}</span>
-          <span>Savings & debt still to set aside</span><span class="neg">−${money(st.committedLeft)}</span>
+          <span>Savings & debt to set aside</span><span class="neg">−${money(st.committedLeft)}</span>
           <span class="total">Safe to spend</span><span class="total ${st.safe < 0 ? 'neg' : 'pos'}">${money(st.safe)}</span>
         </div>
       </div>
-      <div class="card">
-        <div class="card-head"><h2>${twoPay ? 'Pay in this plan' : `This ${periodWord}'s pay`}</h2><a class="btn small" href="#/income">Income</a></div>
-        ${pcs.length ? `<div class="list">${pcs.map((p) => {
-    const tx = recorded.get(`${p.job.id}|${p.payday}`);
-    return `<div class="list-item"><span class="grow"><div class="title">${esc(p.job.name)}</div><div class="small muted">${day(p.payday)} · ${p.salary ? 'salary' : `${p.hours.toFixed(1)} h`}${tx?.estimated ? ' · estimated' : tx ? ' · received' : p.payday > today() ? ' · expected' : ''}</div></span><strong class="num pos">${money(tx && !tx.estimated ? tx.amount : p.net)}</strong></div>`;
-  }).join('')}</div>` : `<p class="small muted">${state.jobs.length ? 'No payday falls in this period.' : 'Add your job in Income & shifts and drop your schedule below — your pay shows up here.'}</p>`}
-        ${otherIncome.length ? `<div class="list">${otherIncome.map((g) => `<div class="list-item"><span class="grow">${esc(g.name)}</span><span class="num pos">${money(g.total)}</span></div>`).join('')}</div>` : ''}
-        ${nextPcs.length ? `<div class="alert good" style="margin-top:10px"><span class="alert-icon">$</span><div class="small">${twoPay ? 'Next plan starts' : 'Next paycheck'} <strong>${day(nextPcs[0].payday)}</strong>: about ${money(sum(nextPcs, (p) => p.net), { cents: false })}</div></div>` : ''}
-      </div>
+      ${payCardsHtml(tl)}
     </div>
-
-    ${twoPay ? `<div class="card" style="margin-top:16px">
-      <div class="card-head"><div><h2>Your two paychecks</h2><p>Each paycheck pays the bills due before the next one.</p></div></div>
-      <div class="grid cols-2">${halves.map((h) => `<div class="half ${h.now ? 'now' : ''}">
-        <div class="row between"><strong>Paycheck ${h.n} · ${day(h.from)}</strong>${h.now ? '<span class="badge info">now</span>' : h.done ? '<span class="badge">done</span>' : '<span class="badge">next</span>'}</div>
-        <div class="small muted" style="margin-bottom:8px">covers ${day(h.from)} – ${day(h.to)}</div>
-        <div class="kv small">
-          <span>Pay</span><span class="pos">${money(h.pay)}</span>
-          ${h.bills.map((b) => `<span>${esc(b.bill.name)} · ${fmtDate(b.date)}${b.paid ? ' ✓' : ''}</span><span class="neg">−${money(b.amount)}</span>`).join('') || '<span class="muted">No bills due</span><span></span>'}
-          <span class="total">Left after bills</span><span class="total ${h.pay - h.billTotal < 0 ? 'neg' : ''}">${money(h.pay - h.billTotal)}</span>
-          ${h.spent ? `<span>Spent & saved so far</span><span>−${money(h.spent)}</span>` : ''}
-        </div>
-        ${h.pay - h.billTotal < 0 ? `<div class="alert warn" style="margin-top:8px"><span class="alert-icon">!</span><div class="small">This paycheck doesn't cover its bills — keep ${money(h.billTotal - h.pay, { cents: false })} from the other paycheck.</div></div>` : ''}
-      </div>`).join('')}</div>
-    </div>` : ''}
+    ${tl.pays.length && !tl.pays.some((p) => p.shifts.length) && !state.jobs.length ? '<div class="alert info" style="margin-top:12px"><span class="alert-icon">i</span><div>Add your job in <a href="#/income?tab=jobs">Income & shifts</a> and drop your work schedule below — each upcoming pay will show the shifts behind it.</div></div>' : ''}
+    ${laterHtml(tl)}
 
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card">
@@ -125,8 +92,7 @@ export async function render(el, ctx) {
       </div>
     </div>
 
-    <div class="grid cols-3" style="margin-top:16px">
-      <div class="card span-2">
+    <div class="card" style="margin-top:16px">
         <div class="card-head"><h2>Add something</h2></div>
         <div class="quick">
           <label class="dropzone" data-drop="receipt"><div class="big">🧾</div><strong>Receipt</strong><div class="small muted">photo or PDF → sorted expenses</div><input type="file" accept="image/*,application/pdf" multiple hidden></label>
@@ -138,11 +104,6 @@ export async function render(el, ctx) {
           <a class="btn small" href="#/investments">📈 Invest</a>
           <a class="btn small" href="#/review">✓ Review this ${periodWord}</a>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><h2>Next 7 days of work</h2></div>
-        ${week.length ? `<div class="list">${week.slice(0, 6).map((x) => `<div class="list-item"><span class="grow"><div class="title">${day(x.date)}</div><div class="small muted">${x.start}–${x.end} · ${esc(x.job?.name || '')}</div></span><span class="num small">${money(x.gross, { cents: false })}</span></div>`).join('')}</div>` : '<p class="small muted">No shifts coming up. Drop your schedule to add them.</p>'}
-      </div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -155,6 +116,7 @@ export async function render(el, ctx) {
       </div>
     </div>`;
 
+  bindTimeline(el, ctx);
   $('#paydayForm', el)?.addEventListener('submit', (e) => {
     e.preventDefault();
     const f = e.target;

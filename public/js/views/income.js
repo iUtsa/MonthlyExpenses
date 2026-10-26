@@ -4,13 +4,14 @@ import {
   emptyState, parseCSV, loadScript, addDays, startOfWeek,
 } from '../util.js';
 import {
-  computeShifts, earningsForMonth, paychecks, yearTaxProjection, annualTax, shiftHours,
+  computeShifts, earningsForMonth, paychecks, payTimeline, yearTaxProjection, annualTax, shiftHours,
   PAY_FREQUENCIES, FILING_STATUSES, TAX_TABLES, TAX_MODES, TAX_LINES,
 } from '../calc.js';
 import { parseScheduleRows, parseScheduleText, parseICS, personMatches } from '../parse.js';
 import { barChart, seriesColor } from '../charts.js';
 import { uploadFiles, ocr, prepareForAI } from './receipts.js';
 import { replaceEstimate } from '../automation.js';
+import { payCardsHtml, laterHtml, bindTimeline } from './pay-timeline.js';
 
 let tab = 'overview';
 let pending = null; // parsed schedule awaiting confirmation
@@ -47,6 +48,7 @@ function overview(el, ctx) {
   const word = `this ${ctx.range.word}`;
   const upcoming = paychecks(state, { from: today(), to: addDays(today(), 45) });
   const recorded = new Map(state.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
+  const tl = payTimeline(state);
 
   // Weekly breakdown for the chart
   const weeks = [...new Set(e.shifts.map((s) => s.week))].sort();
@@ -59,6 +61,7 @@ function overview(el, ctx) {
       <div class="card tile"><span class="tile-label">Paid this month (gross)</span><span class="tile-value">${money(e.paidGross, { cents: false })}</span><span class="tile-sub">${e.paychecks.length} paychecks</span></div>
       <div class="card tile"><span class="tile-label">Expected take-home</span><span class="tile-value pos">${money(e.paidNet, { cents: false })}</span><span class="tile-sub">Paid ${word} — already in your budget</span></div>
     </div>
+    ${tl.pays.length ? `<div class="grid cols-2" style="margin-top:16px">${payCardsHtml(tl)}</div>${laterHtml(tl)}` : ''}
     <div class="grid cols-2" style="margin-top:16px">
       <div class="card">
         <div class="card-head"><div><h2>Weekly gross earnings</h2><p>${esc(ctx.range.label)} · week starting</p></div></div>
@@ -90,6 +93,7 @@ function overview(el, ctx) {
     });
   }
 
+  bindTimeline(el, ctx);
   on(el, 'click', '[data-record]', async (ev, b) => {
     const pc = [...e.paychecks, ...upcoming].find((p) => `${p.job.id}|${p.payday}` === b.dataset.record);
     if (!pc) return;

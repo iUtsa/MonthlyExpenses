@@ -17,25 +17,15 @@ export const PLAN_FREQUENCIES = [
 ];
 const pad2 = (n) => String(n).padStart(2, '0');
 
-// Every range carries `word` ('month' | 'paycheck' | 'plan') and `title` for display.
+// Every range carries `word` ('month' | 'paycheck') and `title` for display.
 export function monthRange(month) {
   const days = daysInMonth(month);
-  return { kind: 'month', key: month, from: `${month}-01`, to: `${month}-${pad2(days)}`, payday: null, nextPayday: null, paydays: [], halves: [], days, label: monthLabel(month), word: 'month', title: monthLabel(month) };
+  return { kind: 'month', key: month, from: `${month}-01`, to: `${month}-${pad2(days)}`, payday: null, nextPayday: null, days, label: monthLabel(month), word: 'month', title: monthLabel(month) };
 }
 
 function payRange(from, to) {
   const label = `${fmtDate(from)} – ${fmtDate(to)}`;
-  return { kind: 'period', key: `P${from}`, from, to, payday: from, nextPayday: addDays(to, 1), paydays: [from], halves: [{ from, to }], days: daysBetween(from, to) + 1, label, word: 'paycheck', title: `Paycheck · ${label}` };
-}
-
-// Two paychecks at a time: about a month, lined up with real paydays. `halves` are the two pay
-// periods inside it (bills in each half are covered by that half's paycheck).
-function twoPayRange(from, mid, to) {
-  const label = `${fmtDate(from)} – ${fmtDate(to)}`;
-  return {
-    kind: 'period', key: `B${from}`, from, to, payday: from, nextPayday: addDays(to, 1), paydays: [from, mid],
-    halves: [{ from, to: addDays(mid, -1) }, { from: mid, to }], days: daysBetween(from, to) + 1, label, word: 'plan', title: `2 paychecks · ${label}`,
-  };
+  return { kind: 'period', key: `P${from}`, from, to, payday: from, nextPayday: addDays(to, 1), days: daysBetween(from, to) + 1, label, word: 'paycheck', title: `Paycheck · ${label}` };
 }
 
 // A known payday: the one set in Settings, else the next payday of your first job.
@@ -47,51 +37,19 @@ export function planAnchor(s) {
 }
 
 export const PLAN_MODES = [
-  { id: 'twopay', name: 'Two paychecks at a time (about a month)' },
-  { id: 'paycheck', name: 'Each paycheck' },
+  { id: 'paycheck', name: 'By paycheck — Home shows my next two pays' },
   { id: 'month', name: 'Calendar month' },
 ];
-// 'twopay' | 'paycheck' | 'month' — falls back to months until a payday is known.
+// 'paycheck' | 'month' — falls back to months until a payday is known.
 export const planMode = (s) => {
   const p = s.settings.planning || {};
   if (p.mode === 'month') return 'month';
-  if (!(p.frequency === 'semimonthly' || planAnchor(s))) return 'month';
-  return p.mode === 'paycheck' ? 'paycheck' : 'twopay';
+  return (p.frequency === 'semimonthly' || planAnchor(s)) ? 'paycheck' : 'month';
 };
-
-// Start of the single pay period containing `date` (used to line up two-paycheck plans).
-function singlePeriodStart(s, date) {
-  const p = s.settings.planning || {};
-  const len = p.frequency === 'weekly' ? 7 : 14;
-  const offset = ((daysBetween(planAnchor(s), date) % len) + len) % len;
-  return addDays(date, -offset);
-}
-
-// Two-paycheck plans start on the payday saved in `planning.blockStart` (set the first time,
-// so the current plan covers the paycheck you're on now and the next one).
-export function defaultBlockStart(s) {
-  if (planMode(s) !== 'twopay' || s.settings.planning?.frequency === 'semimonthly') return null;
-  return singlePeriodStart(s, today());
-}
 
 export function periodFor(s, date) {
   const p = s.settings.planning || {};
-  const mode = planMode(s);
-  if (mode === 'month') return monthRange(date.slice(0, 7));
-  if (mode === 'twopay') {
-    if (p.frequency === 'semimonthly') {
-      // Paid on the 15th and the last day: each plan runs 15th → 14th of next month.
-      const month = date.slice(0, 7);
-      const start = Number(date.slice(8)) >= 15 ? month : shiftMonth(month, -1);
-      const next = shiftMonth(start, 1);
-      return twoPayRange(`${start}-15`, `${start}-${pad2(daysInMonth(start))}`, `${next}-14`);
-    }
-    const len = p.frequency === 'weekly' ? 7 : 14;
-    const anchor = p.blockStart || singlePeriodStart(s, today());
-    const offset = ((daysBetween(anchor, date) % (2 * len)) + 2 * len) % (2 * len);
-    const from = addDays(date, -offset);
-    return twoPayRange(from, addDays(from, len), addDays(from, 2 * len - 1));
-  }
+  if (planMode(s) === 'month') return monthRange(date.slice(0, 7));
   if (p.frequency === 'semimonthly') {
     const month = date.slice(0, 7);
     const mid = `${month}-15`;
@@ -961,4 +919,43 @@ export function moneyFlow(s, x) {
   const incoming = group(tx.filter((t) => t.type === 'income'), (t) => t.merchant || sourceName(t.sourceId), (t) => t.merchant || sourceName(t.sourceId));
   const outgoing = group(tx.filter((t) => t.type === 'expense'), (t) => t.categoryId || '__none', (t) => s.categories.find((c) => c.id === t.categoryId)?.name || 'Uncategorized');
   return { range: r, incoming, outgoing, totalIn: round2(sum(incoming, (g) => g.total)), totalOut: round2(sum(outgoing, (g) => g.total)) };
+}
+
+/* ======================================================================
+   Pay timeline: from today forward — the next pay coming, the one after it, and
+   every later scheduled shift grouped by the payday it lands on.
+   ====================================================================== */
+export function payTimeline(s, asOf = today(), { count = 2, horizonDays = 120 } = {}) {
+  const now = periodFor(s, asOf);
+  if (now.kind !== 'period') return { now: null, pays: [], later: [] };
+  const firstPayday = now.from === asOf ? asOf : now.nextPayday;
+  const recorded = new Map(s.transactions.filter((t) => t.paycheckKey).map((t) => [t.paycheckKey, t]));
+  const describe = (range) => {
+    const checks = paychecks(s, { from: range.from, to: range.to });
+    const shifts = checks.flatMap((pc) => pc.shifts.map((x) => ({ ...x, done: x.date < asOf })))
+      .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+    const received = checks.map((pc) => recorded.get(`${pc.job.id}|${pc.payday}`)).filter((t) => t && !t.estimated);
+    const fromShifts = sum(checks, (pc) => { const t = recorded.get(`${pc.job.id}|${pc.payday}`); return t && !t.estimated ? t.amount : pc.net; });
+    const plannedIncome = monthSummary(s, range).plannedIncome;
+    const amount = checks.length ? fromShifts : plannedIncome; // no job set up: use the budget's income
+    const bills = (s.bills || []).flatMap((bill) => billOccurrences(bill, range.from, range.to).map((date) => ({ bill, date, amount: Number(bill.amount) || 0 })))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const billTotal = sum(bills, (b) => b.amount);
+    return {
+      payday: range.from, range, amount: round2(amount), gross: round2(sum(checks, (pc) => pc.gross)), checks, shifts,
+      hours: sum(shifts, (x) => x.hours), done: shifts.filter((x) => x.done).length,
+      workFrom: checks.length ? checks.map((pc) => pc.start).sort()[0] : null,
+      workTo: checks.length ? checks.map((pc) => pc.end).sort().at(-1) : null,
+      status: received.length && received.length === checks.length ? 'received' : 'expected',
+      bills, billTotal: round2(billTotal), leftAfterBills: round2(amount - billTotal),
+    };
+  };
+  const pays = [];
+  let range = periodFor(s, firstPayday);
+  for (let i = 0; i < count; i++) { pays.push(describe(range)); range = periodFor(s, range.nextPayday); }
+  // Later: every future paycheck that has scheduled shifts (or salary) behind it.
+  const later = paychecks(s, { from: range.from, to: addDays(asOf, horizonDays) })
+    .filter((pc) => pc.shifts.length || pc.salary)
+    .map((pc) => ({ payday: pc.payday, job: pc.job, amount: round2(pc.net), hours: pc.hours, shifts: pc.shifts.map((x) => ({ ...x, done: x.date < asOf })), workFrom: pc.start, workTo: pc.end }));
+  return { now, nextPayday: firstPayday, pays, later };
 }

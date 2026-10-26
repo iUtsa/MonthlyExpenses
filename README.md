@@ -41,23 +41,16 @@ Nothing is estimated behind your back:
 - **Overtime:** you enter overtime hours per shift. Automatic "after X hours per week" overtime is an opt-in setting on the job.
 - The Tax calculator tab is a planning tool only; it never changes paychecks.
 
-## Planned two paychecks at a time
+## Your upcoming pay, at a glance
 
-Paid every two weeks? By default each plan covers **your next two paychecks**, which is about a month, but lined up with your real paydays (e.g. Oct 16 + Oct 30, through Nov 12).
+Paid every two weeks? Home looks forward from today:
 
-- Home shows **Paycheck 1** and **Paycheck 2** side by side: what each pays you, which bills it has to cover before the next payday, and what's left. It warns you when one paycheck can't cover its bills, so you know how much to hold back from the other.
-- Settings → **Plan my money by** can also plan one paycheck at a time or by calendar month, and "Start plans with the … paycheck instead" pairs your paychecks the other way.
+- **Right now:** what's safe to spend until your next payday, and about how much a day.
+- **Next pay:** the amount, the work dates it pays for, and each shift ✓ worked or ○ still to come. It also lists the bills it has to cover before the following payday and what's left, with a warning if it falls short.
+- **Pay after that:** the same for the following paycheck.
+- **Later scheduled shifts:** every further shift, grouped by the payday it lands on, with an estimated take-home.
 
-- **‹ 2 paychecks · Oct 16 – Nov 12 ›** at the top steps from plan to plan, and **Today** jumps back.
-- **Home** answers the everyday questions:
-  - how much is safe to spend until the next payday (and per day)
-  - this paycheck's pay
-  - bills due before the next payday (paid or still owed)
-  - planned vs. spent
-  - **where money came from** and **where it went**, with each line expanding to its transactions
-- **Bills** count in the paycheck they're actually due in. Monthly amounts (sinking funds, debt payments, investing) are split by the paycheck's length.
-- Budget, transactions, income, reports and review all follow the selected paycheck.
-- Settings → **Plan my money by** switches to weekly, twice-a-month (15th and last day), or calendar months.
+Budgets run one paycheck at a time (payday to the day before the next payday). **Plan this paycheck →** on any upcoming pay opens its budget. Settings → **Plan my money by** switches to weekly, twice-a-month, or calendar months.
 
 ## What's inside
 

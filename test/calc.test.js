@@ -412,32 +412,32 @@ test('paycheck budget: bills on their due dates, monthly amounts split, safe to 
   assert.deepEqual(flow.outgoing.map((g) => [g.name.split(' ')[0], g.total]), [['Groceries', 80], ['Internet', 50]]);
 });
 
-test('two-paycheck plans cover two paydays (about a month) and split bills by paycheck', async () => {
-  const { periodFor, shiftRange, monthSummary, safeToSpend, planMode } = await import('../public/js/calc.js');
+test('pay timeline looks forward: next pay, the one after, and later shifts', async () => {
+  const { payTimeline } = await import('../public/js/calc.js');
   const s = createSeed();
-  s.settings.planning = { mode: 'twopay', frequency: 'biweekly', payday: '2026-10-16', blockStart: '2026-10-16' };
-  assert.equal(planMode(s), 'twopay');
-  const r = periodFor(s, '2026-10-25');
-  assert.deepEqual([r.from, r.to, r.days, r.key, r.word], ['2026-10-16', '2026-11-12', 28, 'B2026-10-16', 'plan']);
-  assert.deepEqual(r.paydays, ['2026-10-16', '2026-10-30']);
-  assert.deepEqual(r.halves, [{ from: '2026-10-16', to: '2026-10-29' }, { from: '2026-10-30', to: '2026-11-12' }]);
-  assert.equal(periodFor(s, '2026-11-12').from, '2026-10-16');
-  assert.equal(periodFor(s, '2026-11-13').from, '2026-11-13');
-  assert.equal(shiftRange(s, r, 1).from, '2026-11-13');
-  assert.equal(shiftRange(s, r, -1).from, '2026-09-18');
-  // Rent on Nov 1 falls in this plan (paid from paycheck 2).
   s.sinkingFunds = []; s.debts = []; s.investing.accounts = [];
+  // Biweekly job: pay periods end on Saturdays, paid 6 days later (Fridays).
+  s.jobs = [{ id: 'j', name: 'Café', sourceId: 'side', rate: 20, payFrequency: 'biweekly', periodEndAnchor: '2026-10-24', payLagDays: 6, tax: { mode: 'none' } }];
+  s.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '' };
+  const shift = (id, date) => ({ id, jobId: 'j', date, start: '09:00', end: '13:00', breakMin: 0 });
+  s.shifts = [
+    shift('a', '2026-10-13'), shift('b', '2026-10-20'), // work Oct 11–24 → paid Fri Oct 30
+    shift('c', '2026-10-27'), shift('d', '2026-11-03'), // work Oct 25–Nov 7 → paid Fri Nov 13
+    shift('e', '2026-11-10'), shift('f', '2026-11-24'), // later paychecks
+  ];
   s.bills = [{ id: 'rent', name: 'Rent', amount: 1200, categoryId: 'housing', frequency: 'monthly', nextDue: '2026-11-01' }];
-  assert.equal(monthSummary(s, r).rows.find((x) => x.id === 'housing').planned, 1200);
-  assert.equal(safeToSpend(s, r, '2026-10-25').bills[0].date, '2026-11-01');
-  // Twice-a-month pay: each plan runs from the 15th to the 14th and includes the 15th and the last day.
-  s.settings.planning = { mode: 'twopay', frequency: 'semimonthly' };
-  const sm = periodFor(s, '2026-10-20');
-  assert.deepEqual([sm.from, sm.to, ...sm.paydays], ['2026-10-15', '2026-11-14', '2026-10-15', '2026-10-31']);
-  // Older saved settings switch to two-paycheck plans; an explicit monthly choice is kept.
-  const { migrate } = await import('../public/js/seed.js');
-  const a = createSeed(); a.settings.planning = { mode: 'paycheck', frequency: 'biweekly', payday: '' }; migrate(a);
-  assert.equal(a.settings.planning.mode, 'twopay');
-  const b = createSeed(); b.settings.planning = { mode: 'month' }; migrate(b);
-  assert.equal(b.settings.planning.mode, 'month');
+  const tl = payTimeline(s, '2026-10-25');
+  assert.equal(tl.nextPayday, '2026-10-30');
+  const [next, after] = tl.pays;
+  assert.equal(next.payday, '2026-10-30');
+  assert.deepEqual([next.workFrom, next.workTo], ['2026-10-11', '2026-10-24']);
+  assert.deepEqual(next.shifts.map((x) => [x.id, x.done]), [['a', true], ['b', true]]);
+  assert.equal(next.amount, 160); // 8 h × $20, no tax set
+  assert.deepEqual(next.bills.map((b) => b.bill.id), ['rent']); // rent Nov 1 is paid from the Oct 30 pay
+  assert.equal(next.leftAfterBills, 160 - 1200);
+  assert.equal(after.payday, '2026-11-13');
+  assert.deepEqual(after.shifts.map((x) => [x.id, x.done]), [['c', false], ['d', false]]);
+  assert.deepEqual(tl.later.map((l) => [l.payday, l.shifts.map((x) => x.id).join()]), [['2026-11-27', 'e'], ['2026-12-11', 'f']]);
+  // On payday itself, that pay is "next".
+  assert.equal(payTimeline(s, '2026-10-30').pays[0].payday, '2026-10-30');
 });

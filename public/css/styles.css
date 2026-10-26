@@ -170,6 +170,18 @@ small, .small { font-size: 12px; }
 .half { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
 .half.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
+/* ---------- Pay timeline ---------- */
+.pay-card.next { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+.pay-covers { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); }
+.shift-list summary { cursor: pointer; color: var(--text-2); padding: 2px 0; }
+.shift-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+.shift-line:last-child { border-bottom: 0; }
+.shift-line.done { color: var(--text-2); }
+.shift-line .grow { flex: 1; min-width: 0; }
+.shift-mark { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border-strong); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; color: var(--muted); }
+.shift-mark.done { background: var(--good); border-color: var(--good); color: #fff; }
+.shift-mark.today { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+
 /* ---------- Money flow ---------- */
 .flow-group { border-bottom: 1px solid var(--border); }
 .flow-group:last-child { border-bottom: 0; }
